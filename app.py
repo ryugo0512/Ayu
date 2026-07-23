@@ -5,6 +5,7 @@ import datetime
 import json
 import os
 import requests
+from bs4 import BeautifulSoup
 import altair as alt
 
 # ---------------------------------------------------------
@@ -36,43 +37,82 @@ def delete_log(index):
         save_logs(logs)
 
 # ---------------------------------------------------------
-# 2. 河川・観測所データ設定（正確な平水基準値 & 観測所情報）
+# 2. 河川・観測所データ設定（Yahoo!天気URL・地点コード紐付け）
 # ---------------------------------------------------------
 RIVERS = {
     "尻別川本流（蘭越）": {
-        "lat": 42.8021, "lon": 140.5251, "base_level": 2.10,
+        "lat": 42.8021, "lon": 140.5251, "base_level": 2.10, "default_actual": 2.10,
         "station_name": "蘭越", "river_system": "尻別川水系 尻別川",
+        "yahoo_url": "https://typhoon.yahoo.co.jp/weather/river/",
         "runoff_factor": 0.025, "decay_rate": 0.96, "drought_rate": 0.0005,
         "temp_base": 11.0, "temp_factor": 0.35, "max_temp": 21.5
     },
     "昆布川（昆布）": {
-        "lat": 42.7958, "lon": 140.5986, "base_level": 1.50,
+        "lat": 42.7958, "lon": 140.5986, "base_level": 1.50, "default_actual": 1.50,
         "station_name": "昆布川橋", "river_system": "尻別川水系 昆布川",
+        "yahoo_url": "https://typhoon.yahoo.co.jp/weather/river/",
         "runoff_factor": 0.030, "decay_rate": 0.95, "drought_rate": 0.0005,
         "temp_base": 10.5, "temp_factor": 0.38, "max_temp": 21.0
     },
     "天ノ川（上ノ国）": {
-        "lat": 41.7997, "lon": 140.1163, "base_level": 1.77,
+        "lat": 41.7997, "lon": 140.1163, "base_level": 1.77, "default_actual": 1.76,
         "station_name": "古守大橋", "river_system": "天ノ川水系 天ノ川",
+        "yahoo_url": "https://typhoon.yahoo.co.jp/weather/river/0101430001/",
         "runoff_factor": 0.030, "decay_rate": 0.97, "drought_rate": 0.0005,
         "temp_base": 12.0, "temp_factor": 0.40, "max_temp": 22.5
     },
     "上ノ沢川（天ノ川水系）": {
-        "lat": 41.7554, "lon": 140.2321, "base_level": 1.74,
+        "lat": 41.7554, "lon": 140.2321, "base_level": 1.74, "default_actual": 1.74,
         "station_name": "上ノ沢橋", "river_system": "天ノ川水系 上ノ沢川",
+        "yahoo_url": "https://typhoon.yahoo.co.jp/weather/river/",
         "runoff_factor": 0.028, "decay_rate": 0.96, "drought_rate": 0.0005,
         "temp_base": 11.8, "temp_factor": 0.39, "max_temp": 22.0
     },
     "朱太川（黒松内）": {
-        "lat": 42.6683, "lon": 140.3061, "base_level": 1.40,
+        "lat": 42.6683, "lon": 140.3061, "base_level": 1.40, "default_actual": 1.40,
         "station_name": "朱太川実橋", "river_system": "朱太川水系 朱太川",
+        "yahoo_url": "https://typhoon.yahoo.co.jp/weather/river/",
         "runoff_factor": 0.035, "decay_rate": 0.96, "drought_rate": 0.0005,
         "temp_base": 11.5, "temp_factor": 0.38, "max_temp": 22.0
     }
 }
 
 # ---------------------------------------------------------
-# 3. 外部データ取得モジュール（天気予報）
+# 3. Yahoo!天気スクレイピングモジュール（実測値自動取得）
+# ---------------------------------------------------------
+@st.cache_data(ttl=600)
+def fetch_yahoo_water_level(url, default_val):
+    if not url or "0101430001" not in url:  # 現状有効な個別URLが設定されている場合のみスクレイピング試行
+        return default_val, "デフォルト値"
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    try:
+        res = requests.get(url, headers=headers, timeout=5)
+        res.raise_for_status()
+        soup = BeautifulSoup(res.text, "html.parser")
+        
+        # Yahoo!天気の水位表示要素を探索（構造変更に備え複数候補をチェック）
+        # 通常、現在の水位は特定のクラスや数値テキストとして格納されています
+        val_elem = soup.find("td", class_="rnk") or soup.find(class_="waterLevel") or soup.find(string=lambda t: t and "m" in t)
+        
+        # 簡易的にテキスト抽出または正規表現等で数値を探す
+        for text in soup.stripped_strings:
+            try:
+                # 浮動小数点の水位らしい数値（例: 1.76）を検出
+                val = float(text)
+                if 0.5 <= val <= 10.0:  # 河川水位として現実的な範囲
+                    return val, "Yahoo!天気 (実測自動取得)"
+            except ValueError:
+                continue
+                
+        return default_val, "デフォルト値 (取得失敗・フォールバック)"
+    except Exception:
+        return default_val, "デフォルト値 (通信エラー)"
+
+# ---------------------------------------------------------
+# 4. 外部データ取得モジュール（天気予報）
 # ---------------------------------------------------------
 @st.cache_data(ttl=3600)
 def fetch_weather_data(lat, lon):
@@ -103,9 +143,9 @@ def get_weather_desc(code):
         return "☁️ 曇り"
 
 # ---------------------------------------------------------
-# 4. 水位推移シミュレーション
+# 5. 水位推移シミュレーション
 # ---------------------------------------------------------
-def simulate_water_levels(df_weather, base_level, runoff_factor, decay_rate, drought_rate):
+def simulate_water_levels(df_weather, base_level, current_actual, runoff_factor, decay_rate, drought_rate):
     levels = []
     current_runoff = 0.0
     effective_rain = 0.0
@@ -134,17 +174,25 @@ def simulate_water_levels(df_weather, base_level, runoff_factor, decay_rate, dro
         levels.append(calculated_level)
         
     df_weather["simulated_level"] = levels
+    
+    now = pd.Timestamp.now()
+    if not df_weather[df_weather["time"] <= now].empty:
+        idx_now = (df_weather["time"] - now).abs().argsort()[:1].values[0]
+        sim_at_now = df_weather.loc[idx_now, "simulated_level"]
+        shift_diff = current_actual - sim_at_now
+        df_weather["simulated_level"] = df_weather["simulated_level"] + shift_diff
+    
     return df_weather
 
 # ---------------------------------------------------------
-# 5. 解析・AI補正エンジン
+# 6. 解析・AI補正エンジン
 # ---------------------------------------------------------
-def analyze_condition(df_weather, river_info, user_logs, target_river, target_date):
+def analyze_condition(df_weather, river_info, user_logs, target_river, target_date, current_actual):
     effective_base = river_info["base_level"]
 
     if df_weather is None or df_weather.empty:
         return {
-            "water_level": effective_base,
+            "water_level": current_actual,
             "level_trend": "平水（安定）",
             "days_since_flood": 4,
             "moss_growth": 50,
@@ -162,12 +210,13 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
             "water_temp_max": 18.0,
             "water_temp_avg": 16.5,
             "max_wind": 2.0,
-            "level_diff": 0.0
+            "level_diff": current_actual - effective_base
         }
 
     df_weather = simulate_water_levels(
         df_weather, 
         effective_base, 
+        current_actual,
         river_info["runoff_factor"], 
         river_info["decay_rate"],
         river_info["drought_rate"]
@@ -243,7 +292,7 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
         max_wind = target_df["windspeed_10m"].max() if "windspeed_10m" in target_df.columns else 0.0
     else:
         hourly_water_temp = [14.0 + (i if i <= 14 else 28 - i) * 0.3 for i in range(24)]
-        current_sim_level = effective_base
+        current_sim_level = current_actual
         weather_desc = "☀️ 晴れ"
         temp_max, temp_min = 22.0, 16.0
         water_temp_max, water_temp_avg = 17.5, 15.8
@@ -322,7 +371,7 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
     }
 
 # ---------------------------------------------------------
-# 6. UI（メイン画面）
+# 7. UI（メイン画面）
 # ---------------------------------------------------------
 st.title("🐟 北海道 鮎コンディション判定 & 未来予測")
 
@@ -335,11 +384,18 @@ with col_sel2:
 
 river_info = RIVERS[target_river]
 
-st.caption(f"📍 観測所: {river_info['station_name']}（{river_info['river_system']}） ／ 平水基準水位: {river_info['base_level']:.2f}m")
+# Yahoo!天気から自動取得＆リンク表示
+current_actual, fetch_source = fetch_yahoo_water_level(river_info["yahoo_url"], river_info["default_actual"])
+
+col_caption1, col_caption2 = st.columns([3, 1])
+with col_caption1:
+    st.caption(f"📍 観測所: {river_info['station_name']}（{river_info['river_system']}） ／ 平水基準水位: {river_info['base_level']:.2f}m ／ 現在実測値: **{current_actual:.2f}m** ({fetch_source})")
+with col_caption2:
+    st.markdown(f"[🌊 Yahoo!天気ページ]({river_info['yahoo_url']})")
 
 df_weather = fetch_weather_data(river_info["lat"], river_info["lon"])
 user_logs = load_logs()
-res = analyze_condition(df_weather, river_info, user_logs, target_river, target_date)
+res = analyze_condition(df_weather, river_info, user_logs, target_river, target_date, current_actual)
 
 st.markdown("---")
 
@@ -380,7 +436,7 @@ st.write(f"**濁り・澄み具合予測**: {res['clarity_recovery']}")
 st.caption(f"※ 垢育成シーズンモード: **{res['season_mode']}** ／ 全飛びからの経過日数: **{res['days_since_flood']}日**")
 
 # ---------------------------------------------------------
-# 7. 指定日の1時間ごとの詳細天気予報
+# 8. 指定日の1時間ごとの詳細天気予報
 # ---------------------------------------------------------
 st.markdown("---")
 st.subheader(f"🌤️ {target_date.strftime('%m月%d日')} の1時間ごとのピンポイント天気予報")
@@ -397,7 +453,7 @@ if not res["target_df"].empty:
     st.dataframe(table_df.T, use_container_width=True)
 
 # ---------------------------------------------------------
-# 8. 水位グラフ（表示期間切替対応）
+# 9. 水位グラフ（表示期間切替対応）
 # ---------------------------------------------------------
 st.markdown("---")
 st.subheader("📊 水位グラフ（基準水位 ＆ 天気予報AI予測）")
@@ -424,7 +480,7 @@ if not res["df_hydro"].empty:
     st.caption(f"※ シミュレーション水位：気象予報（雨量・気温）を基にしたAI予測値 ／ 平水基準水位：{target_river}の固定平水線（{river_info['base_level']:.2f}m）")
 
 # ---------------------------------------------------------
-# 9. 当日の時合・活性タイムライン（Y軸スケール10℃〜30℃固定）
+# 10. 当日の時合・活性タイムライン（Y軸スケール10℃〜30℃固定）
 # ---------------------------------------------------------
 st.markdown("---")
 st.subheader("⏰ 釣行日の水温推移 & ベスト時合予測")
@@ -466,7 +522,7 @@ if over_hours:
     st.warning(f"⚠️ **高水温注意 (24℃超)**: **{o_start:02d}:00 ～ {o_end:02d}:00**（高水温により鮎がヘバる可能性がある時間帯です）")
 
 # ---------------------------------------------------------
-# 10. 実釣ログ入力 & 削除管理機能
+# 11. 実釣ログ入力 & 削除管理機能
 # ---------------------------------------------------------
 st.markdown("---")
 st.subheader("📝 実釣ログの記録（学習用）")
@@ -503,7 +559,7 @@ with st.form("log_form"):
         st.rerun()
 
 if user_logs:
-    with st.expander("📂 これまでの実釣ログを確認・削除"):
+    with st.expander("📂 下記の実釣ログを確認・削除"):
         for idx, log in enumerate(user_logs):
             c1, c2, c3, c4, c5 = st.columns([2, 3, 2, 3, 2])
             c1.write(f"📅 {log.get('date')}")
