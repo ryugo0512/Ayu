@@ -78,7 +78,7 @@ RIVERS = {
 }
 
 # ---------------------------------------------------------
-# 3. Yahoo!天気水位自動取得モジュール（標準ライブラリ使用）
+# 3. Yahoo!天気水位自動取得モジュール（修正版）
 # ---------------------------------------------------------
 @st.cache_data(ttl=600)
 def fetch_yahoo_water_level(url, default_val):
@@ -92,6 +92,14 @@ def fetch_yahoo_water_level(url, default_val):
         res = requests.get(url, headers=headers, timeout=5)
         res.raise_for_status()
         
+        # 「現在水位」の近辺にある数値を優先して探す
+        match_current = re.search(r'現在\s*水位.*?([0-9]+\.[0-9]{2})\s*m', res.text, re.DOTALL)
+        if match_current:
+            val = float(match_current.group(1))
+            if 0.0 <= val <= 100.0:
+                return val, "Yahoo!天気 (自動取得)"
+
+        # フォールバック：ページ全体からm付きの数値を安全に探索
         matches = re.findall(r'([0-9]+\.[0-9]{2})\s*m', res.text)
         if matches:
             for m in matches:
@@ -177,7 +185,7 @@ def simulate_water_levels(df_weather, base_level, current_actual, runoff_factor,
     return df_weather
 
 # ---------------------------------------------------------
-# 6. 解析・AI補正エンジン（フィールド感覚反映版）
+# 6. 解析・AI補正エンジン
 # ---------------------------------------------------------
 def analyze_condition(df_weather, river_info, user_logs, target_river, target_date, current_actual):
     effective_base = river_info["base_level"]
