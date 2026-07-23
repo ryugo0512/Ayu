@@ -92,12 +92,11 @@ def fetch_yahoo_water_level(url, default_val):
         res = requests.get(url, headers=headers, timeout=5)
         res.raise_for_status()
         
-        # Yahoo!天気のページから現在水位の数値を正規表現で抽出
         matches = re.findall(r'([0-9]+\.[0-9]{2})\s*m', res.text)
         if matches:
             for m in matches:
                 val = float(m)
-                if 0.0 <= val <= 100.0:  # 河川水位として妥当な範囲
+                if 0.0 <= val <= 100.0:
                     return val, "Yahoo!天気 (自動取得)"
                     
         return default_val, "デフォルト値 (数値未検出)"
@@ -178,7 +177,7 @@ def simulate_water_levels(df_weather, base_level, current_actual, runoff_factor,
     return df_weather
 
 # ---------------------------------------------------------
-# 6. 解析・AI補正エンジン
+# 6. 解析・AI補正エンジン（フィールド感覚反映版）
 # ---------------------------------------------------------
 def analyze_condition(df_weather, river_info, user_logs, target_river, target_date, current_actual):
     effective_base = river_info["base_level"]
@@ -233,7 +232,7 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
     df_past = df_weather[df_weather["time"] <= target_datetime].copy()
     df_past["rain_12h"] = df_past["precipitation"].rolling(12, min_periods=1).sum()
     
-    heavy_rain_events = df_past[(df_past["precipitation"] >= 15.0) | (df_past["rain_12h"] >= 35.0)]
+    heavy_rain_events = df_past[(df_past["precipitation"] >= 30.0) | (df_past["rain_12h"] >= 60.0)]
 
     if not heavy_rain_events.empty:
         last_flood_time = heavy_rain_events["time"].max()
@@ -292,28 +291,31 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
         max_wind = 2.0
 
     level_diff = current_sim_level - effective_base
-    if level_diff < -0.08:
-        level_trend = "📉 渇水傾向（減水）"
-    elif level_diff > 0.05:
-        level_trend = f"📈 高水・引き水（+{level_diff*100:.0f}cm）"
+    
+    if level_diff < 0.0:
+        level_trend = f"📉 渇水傾向 ({level_diff*100:+.0f}cm)"
+    elif level_diff <= 0.15:
+        level_trend = f"✨ 平水〜好条件 ({level_diff*100:+.0f}cm)"
+    elif level_diff <= 0.40:
+        level_trend = f"⚠️ やや高水 ({level_diff*100:+.0f}cm：少し多い)"
     else:
-        level_trend = "平水（安定）"
+        level_trend = f"🚨 大幅高水 ({level_diff*100:+.0f}cm：釣り困難)"
 
     if days_since_flood <= 1 or moss_growth < 20:
         moss_alert = "🚫 全飛び直後（垢ナシ・石白っぽい）"
-    elif days_since_flood <= 4 or moss_growth < 60:
+    elif days_since_flood <= 3 or moss_growth < 50:
         moss_alert = "🟡 垢付き始め（まだ薄く喰い浅い）"
-    elif level_diff < -0.12 and days_since_flood > 10:
-        moss_alert = "⚠️ 垢腐り・泥垢注意（高水温・渇水進行）"
+    elif level_diff < -0.15 and days_since_flood > 10:
+        moss_alert = "⚠️ 垢腐り・泥垢注意（渇水進行）"
     else:
         moss_alert = "✅ 新垢形成完了（良好）"
 
     df_future = df_weather[df_weather["time"] >= target_datetime].head(24)
     future_rain = df_future["precipitation"].sum()
-    if future_rain > 35.0:
-        flood_risk = "🚨 警戒：全飛び（大増水）リスク高"
-    elif future_rain > 15.0:
-        flood_risk = "⚠️ 注意：雨による増水の可能性あり"
+    if future_rain > 50.0:
+        flood_risk = "🚨 警戒：全飛び（＋50cm超の大増水）リスク高"
+    elif future_rain > 25.0:
+        flood_risk = "⚠️ 注意：雨による増水（＋30cm前後）の可能性"
     else:
         flood_risk = "🟢 安定：増水リスク低"
 
@@ -326,16 +328,14 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
         max_cap = 3
     elif days_since_flood <= 4:
         max_cap = 5
-    elif days_since_flood <= 6:
-        max_cap = 7
     else:
         max_cap = 10
 
     score = max(1, min(raw_score, max_cap))
 
-    if level_diff >= 0.30:
+    if level_diff >= 0.50:
         score = 1
-    elif level_diff >= 0.15:
+    elif level_diff >= 0.30:
         score = min(score, 3)
 
     df_hydro = df_weather.copy()
@@ -362,7 +362,6 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
         "max_wind": max_wind,
         "level_diff": level_diff
     }
-
 # ---------------------------------------------------------
 # 7. UI（メイン画面）
 # ---------------------------------------------------------
@@ -377,12 +376,11 @@ with col_sel2:
 
 river_info = RIVERS[target_river]
 
-# Yahoo!天気から自動取得
 current_actual, fetch_source = fetch_yahoo_water_level(river_info["yahoo_url"], river_info["default_actual"])
 
 col_caption1, col_caption2 = st.columns([3, 1])
 with col_caption1:
-    st.caption(f"📍 観測所: {river_info['station_name']}（{river_info['river_system']}） ／ 平水基準水位: {river_info['base_level']:.2f}m ／ 現在実測値: **{current_actual:.2f}m** ({fetch_source})")
+    st.caption(f"📍 観測所: {river_info['station_name']}（{river_info['river_system']}） ／ 基準水位線: {river_info['base_level']:.2f}m ／ 現在実測値: **{current_actual:.2f}m** ({fetch_source})")
 with col_caption2:
     st.markdown(f"[🌊 Yahoo!天気ページ]({river_info['yahoo_url']})")
 
@@ -402,23 +400,23 @@ st.markdown(f"### 🎯 釣行日おすすめ度 : {stars} （**{res['score']}** 
 
 col_alert1, col_alert2 = st.columns(2)
 with col_alert1:
-    st.info(f"**全飛びリスク判定**: {res['flood_risk']}")
+    st.info(f"**増水・全飛びリスク**: {res['flood_risk']}")
 with col_alert2:
     if "⚠️" in res["moss_alert"] or "🚫" in res["moss_alert"] or "🟡" in res["moss_alert"]:
         st.warning(f"**コンディション**: {res['moss_alert']}")
     else:
         st.success(f"**コンディション**: {res['moss_alert']}")
 
-if res["level_diff"] >= 0.30:
-    st.error(f"🚨 **危険（大幅な増水）**: 基準水位（{river_info['base_level']:.2f}m）より **+{res['level_diff']*100:.0f}cm** の増水および強い濁りが予想されます。釣行は極めて危険なため見合わせてください。")
-elif res["level_diff"] >= 0.15:
-    st.warning(f"⚠️ **高水注意**: 基準水位より **+{res['level_diff']*100:.0f}cm** 高めです。立ち込みやポイント選定にご注意ください。")
+if res["level_diff"] >= 0.50:
+    st.error(f"🚨 **大増水（釣り困難）**: 基準水位より **+{res['level_diff']*100:.0f}cm** と大幅な増水が予想されます。垢が飛んでいる可能性が高く、立ち込みは非常に危険です。")
+elif res["level_diff"] >= 0.30:
+    st.warning(f"⚠️ **高水注意**: 基準水位より **+{res['level_diff']*100:.0f}cm** 高めです（水量が多く釣りにくい状態の可能性があります）。")
 
 if res["max_wind"] >= 6.0:
     st.error(f"💨 **強風注意**: 予想最大風速 {res['max_wind']:.1f} m/s （長尺竿の操作・保持にご注意ください）")
 
 col1, col2, col3, col4, col5, col6 = st.columns(6)
-col1.metric("水位 (基準)", f"{res['water_level']:.2f} m", res["level_trend"])
+col1.metric("水位状況", f"{res['water_level']:.2f} m", res["level_trend"])
 col2.metric("天気", res["weather_desc"])
 col3.metric("予想気温", f"{res['temp_max']:.1f}℃", f"最低 {res['temp_min']:.1f}℃")
 col4.metric("推計水温", f"{res['water_temp_max']:.1f}℃", f"平均 {res['water_temp_avg']:.1f}℃")
@@ -426,7 +424,7 @@ col5.metric("ハミ垢生育度", f"{res['moss_growth']} %")
 col6.metric("最大風速", f"{res['max_wind']:.1f} m/s")
 
 st.write(f"**濁り・澄み具合予測**: {res['clarity_recovery']}")
-st.caption(f"※ 垢育成シーズンモード: **{res['season_mode']}** ／ 全飛びからの経過日数: **{res['days_since_flood']}日**")
+st.caption(f"※ 垢育成シーズンモード: **{res['season_mode']}** ／ 大水（＋50cm目安）からの経過日数: **{res['days_since_flood']}日**")
 
 # ---------------------------------------------------------
 # 8. 指定日の1時間ごとの詳細天気予報
@@ -449,7 +447,7 @@ if not res["target_df"].empty:
 # 9. 水位グラフ（表示期間切替対応）
 # ---------------------------------------------------------
 st.markdown("---")
-st.subheader("📊 水位グラフ（基準水位 ＆ 天気予報AI予測）")
+st.subheader("📊 水位グラフ（基準水位線 ＆ 天気予報AI予測）")
 
 graph_range = st.radio(
     "グラフの表示期間を選択してください",
@@ -466,11 +464,11 @@ if not res["df_hydro"].empty:
     
     chart_hydro["シミュレーション水位(m)"] = chart_hydro["simulated_level"]
     chart_hydro["時間"] = chart_hydro["time"].dt.strftime("%m/%d %H時")
-    chart_hydro = chart_hydro.rename(columns={"base_level": "平水基準水位(m)"})
+    chart_hydro = chart_hydro.rename(columns={"base_level": "基準水位線(m)"})
     chart_hydro = chart_hydro.set_index("時間")
     
-    st.line_chart(chart_hydro[["シミュレーション水位(m)", "平水基準水位(m)"]])
-    st.caption(f"※ シミュレーション水位：気象予報（雨量・気温）を基にしたAI予測値 ／ 平水基準水位：{target_river}の固定平水線（{river_info['base_level']:.2f}m）")
+    st.line_chart(chart_hydro[["シミュレーション水位(m)", "基準水位線(m)"]])
+    st.caption(f"※ シミュレーション水位：気象予報（雨量・気温）を基にしたAI予測値 ／ 基準水位線：{target_river}の基準線（{river_info['base_level']:.2f}m）")
 
 # ---------------------------------------------------------
 # 10. 当日の時合・活性タイムライン（Y軸スケール10℃〜30℃固定）
