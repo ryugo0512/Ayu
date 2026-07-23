@@ -182,7 +182,6 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
         feedbacks = [l.get("moss_feedback", 0) for l in river_logs]
         bias_growth = np.mean(feedbacks) * 0.1
 
-    # 水温推計（河川別の基礎水温＋気温応答率＋最大水温制限）
     raw_water_temp = river_info["temp_base"] + (df_weather["temperature_2m"] * river_info["temp_factor"])
     df_weather["estimated_water_temp"] = np.minimum(raw_water_temp, river_info["max_temp"])
 
@@ -208,7 +207,6 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
         clarity_recovery = "清澄（良好）"
         clarity_score = 3
 
-    # 垢育成シーズンモード判定
     m, d = target_date.month, target_date.day
     if m == 7 and d <= 15:
         season_mode = "初期（低水温・緩速成長）"
@@ -225,7 +223,6 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
 
     moss_growth = min(100, int((days_since_flood * growth_rate) * (1.0 + bias_growth)))
 
-    # 対象日の気象・水温計算
     target_df = df_weather[df_weather["time"].dt.date == target_date]
     if not target_df.empty and len(target_df) >= 24:
         hourly_water_temp = target_df["estimated_water_temp"].tolist()[:24]
@@ -286,9 +283,8 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
 
     score = max(1, min(raw_score, max_cap))
 
-    start_time = pd.to_datetime(datetime.date.today() - datetime.timedelta(days=2))
-    end_time = pd.to_datetime(target_date + datetime.timedelta(days=1))
-    df_hydro = df_weather[(df_weather["time"] >= start_time) & (df_weather["time"] < end_time)].copy()
+    # 全データの保持（描画側で期間を動的抽出）
+    df_hydro = df_weather.copy()
     df_hydro["base_level"] = river_info["base_level"]
 
     return {
@@ -362,13 +358,24 @@ st.write(f"**濁り・澄み具合予測**: {res['clarity_recovery']}")
 st.caption(f"※ 垢育成シーズンモード: **{res['season_mode']}** ／ 全飛びからの経過日数: **{res['days_since_flood']}日**")
 
 # ---------------------------------------------------------
-# 7. 水位グラフ（過去：実測、未来：AI天気予報予測で色分け）
+# 7. 水位グラフ（表示期間切替対応）
 # ---------------------------------------------------------
 st.markdown("---")
 st.subheader("📊 水位グラフ（直近実績 ＆ 天気予報AI予測）")
 
+graph_range = st.radio(
+    "グラフの表示期間を選択してください",
+    options=["直近2日間 + 予測", "直近1週間 + 予測"],
+    horizontal=True
+)
+
 if not res["df_hydro"].empty:
-    chart_hydro = res["df_hydro"][["time", "simulated_level", "base_level"]].copy()
+    # 表示開始期間の動的設定
+    past_days = 7 if graph_range == "直近1週間 + 予測" else 2
+    start_time = pd.to_datetime(datetime.date.today() - datetime.timedelta(days=past_days))
+    end_time = pd.to_datetime(target_date + datetime.timedelta(days=1))
+
+    chart_hydro = res["df_hydro"][(res["df_hydro"]["time"] >= start_time) & (res["df_hydro"]["time"] < end_time)].copy()
     
     now_ts = pd.Timestamp.now()
     
