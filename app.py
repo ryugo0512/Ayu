@@ -8,9 +8,6 @@ import requests
 import re
 import altair as alt
 
-# ---------------------------------------------------------
-# 1. 基本設定とデータ永続化
-# ---------------------------------------------------------
 st.set_page_config(page_title="北海道 鮎コンディション判定", page_icon="🐟", layout="wide")
 
 LOG_FILE = "fishing_logs.json"
@@ -36,9 +33,6 @@ def delete_log(index):
         logs.pop(index)
         save_logs(logs)
 
-# ---------------------------------------------------------
-# 2. 河川・観測所データ設定
-# ---------------------------------------------------------
 RIVERS = {
     "尻別川本流（蘭越）": {
         "lat": 42.8021, "lon": 140.5251, "base_level": 9.27, "default_actual": 9.27,
@@ -57,7 +51,7 @@ RIVERS = {
     "天ノ川（上ノ国）": {
         "lat": 41.7997, "lon": 140.1163, "base_level": 1.60, "default_actual": 1.60,
         "station_name": "古守大橋", "river_system": "天ノ川水系 天ノ川",
-        "weather_url": "https://weathernews.jp/onebox/river/?pid=0025700400132",
+        "weather_url": "",
         "runoff_factor": 0.030, "decay_rate": 0.97, "drought_rate": 0.0005,
         "temp_base": 12.0, "temp_factor": 0.40, "max_temp": 22.5
     },
@@ -77,9 +71,6 @@ RIVERS = {
     }
 }
 
-# ---------------------------------------------------------
-# 3. ウェザーニュース水位自動取得モジュール（正規表現修正版）
-# ---------------------------------------------------------
 @st.cache_data(ttl=600)
 def fetch_weather_water_level(url, default_val):
     if not url:
@@ -97,16 +88,13 @@ def fetch_weather_water_level(url, default_val):
             valid_values = [float(m) for m in matches if 0.0 <= float(m) <= 100.0]
             if valid_values:
                 closest_val = min(valid_values, key=lambda x: abs(x - default_val))
-                if abs(closest_val - default_val) <= 5.0:
+                if abs(closest_val - default_val) <= 1.5:
                     return closest_val, "ウェザーニュース (自動取得)"
                     
         return default_val, "デフォルト値 (数値未検出または異常値)"
     except Exception:
         return default_val, "デフォルト値 (通信エラー)"
 
-# ---------------------------------------------------------
-# 4. 外部データ取得モジュール（天気予報）
-# ---------------------------------------------------------
 @st.cache_data(ttl=3600)
 def fetch_weather_data(lat, lon):
     url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=temperature_2m,precipitation,weathercode,sunshine_duration,shortwave_radiation,windspeed_10m&windspeed_unit=ms&past_days=14&forecast_days=7&timezone=Asia%2FTokyo"
@@ -135,9 +123,6 @@ def get_weather_desc(code):
     else:
         return "☁️ 曇り"
 
-# ---------------------------------------------------------
-# 5. 水位推移シミュレーション
-# ---------------------------------------------------------
 def simulate_water_levels(df_weather, base_level, current_actual, runoff_factor, decay_rate, drought_rate):
     levels = []
     current_runoff = 0.0
@@ -177,9 +162,6 @@ def simulate_water_levels(df_weather, base_level, current_actual, runoff_factor,
     
     return df_weather
 
-# ---------------------------------------------------------
-# 6. 解析・AI補正エンジン
-# ---------------------------------------------------------
 def analyze_condition(df_weather, river_info, user_logs, target_river, target_date, current_actual):
     effective_base = river_info["base_level"]
 
@@ -364,9 +346,6 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
         "level_diff": level_diff
     }
 
-# ---------------------------------------------------------
-# 7. UI（メイン画面）
-# ---------------------------------------------------------
 st.title("🐟 北海道 鮎コンディション判定 & 未来予測")
 
 col_sel1, col_sel2 = st.columns(2)
@@ -429,9 +408,6 @@ col6.metric("最大風速", f"{res['max_wind']:.1f} m/s")
 st.write(f"**濁り・澄み具合予測**: {res['clarity_recovery']}")
 st.caption(f"※ 垢育成シーズンモード: **{res['season_mode']}** ／ 大水（＋50cm目安）からの経過日数: **{res['days_since_flood']}日**")
 
-# ---------------------------------------------------------
-# 8. 指定日の1時間ごとの詳細天気予報
-# ---------------------------------------------------------
 st.markdown("---")
 st.subheader(f"🌤️ {target_date.strftime('%m月%d日')} の1時間ごとのピンポイント天気予報")
 
@@ -446,9 +422,6 @@ if not res["target_df"].empty:
     table_df = df_hourly_view[["時刻", "天気", "気温(℃)", "降水量(mm)", "風速(m/s)"]].set_index("時刻")
     st.dataframe(table_df.T, use_container_width=True)
 
-# ---------------------------------------------------------
-# 9. 水位グラフ（表示期間切替対応）
-# ---------------------------------------------------------
 st.markdown("---")
 st.subheader("📊 水位グラフ（基準水位線 ＆ 天気予報AI予測）")
 
@@ -473,9 +446,6 @@ if not res["df_hydro"].empty:
     st.line_chart(chart_hydro[["シミュレーション水位(m)", "基準水位線(m)"]])
     st.caption(f"※ シミュレーション水位：気象予報（雨量・気温）を基にしたAI予測値 ／ 基準水位線：{target_river}の基準線（{river_info['base_level']:.2f}m）")
 
-# ---------------------------------------------------------
-# 10. 当日の時合・活性タイムライン
-# ---------------------------------------------------------
 st.markdown("---")
 st.subheader("⏰ 釣行日の水温推移 & ベスト時合予測")
 
@@ -515,9 +485,6 @@ if over_hours:
     o_start, o_end = min(over_hours), max(over_hours)
     st.warning(f"⚠️ **高水温注意 (24℃超)**: **{o_start:02d}:00 ～ {o_end:02d}:00**（高水温により鮎がヘバる可能性がある時間帯です）")
 
-# ---------------------------------------------------------
-# 11. 実釣ログ入力 & 削除管理機能
-# ---------------------------------------------------------
 st.markdown("---")
 st.subheader("📝 実釣ログの記録（学習用）")
 
