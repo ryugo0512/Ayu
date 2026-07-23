@@ -218,10 +218,6 @@ def analyze_condition(df_weather, is_weather_live, river_info, user_logs, target
 
     target_datetime = datetime.datetime.combine(target_date, datetime.time(12, 0))
 
-    # ターゲット日のデータが存在するか確認
-    target_df = df_weather[df_weather["time"].dt.date == target_date].copy() if "time" in df_weather.columns else pd.DataFrame()
-    has_precipitation_data = is_weather_live and not target_df.empty and len(target_df) >= 24
-
     bias_growth = 0.0
     river_logs = [l for l in user_logs if l.get("river") == target_river]
     if len(river_logs) > 0:
@@ -235,6 +231,10 @@ def analyze_condition(df_weather, is_weather_live, river_info, user_logs, target
     temp_col = "temperature_2m" if "temperature_2m" in df_weather.columns else df_weather.columns[1]
     raw_water_temp = adjusted_temp_base + (df_weather[temp_col] * river_info["temp_factor"])
     df_weather["estimated_water_temp"] = np.minimum(raw_water_temp, river_info["max_temp"])
+
+    # 列を追加した後に target_df を作成するよう修正
+    target_df = df_weather[df_weather["time"].dt.date == target_date].copy() if "time" in df_weather.columns else pd.DataFrame()
+    has_precipitation_data = is_weather_live and not target_df.empty and len(target_df) >= 24
 
     df_past = df_weather[df_weather["time"] <= target_datetime].copy() if "time" in df_weather.columns else df_weather.copy()
     if "precipitation" in df_past.columns:
