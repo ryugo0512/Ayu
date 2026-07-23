@@ -409,6 +409,17 @@ def analyze_condition(df_weather, is_weather_live, river_info, user_logs, target
 
 st.title("北海道 鮎コンディション判定 & 未来予測")
 
+# サイドバーにリセットボタンを配置
+with st.sidebar:
+    st.header("管理メニュー")
+    if st.button("水位履歴データをリセット"):
+        if os.path.exists(WATER_LOG_FILE):
+            os.remove(WATER_LOG_FILE)
+            st.success("水位履歴をリセットしました！")
+            st.rerun()
+        else:
+            st.info("リセットする履歴データはありません。")
+
 col_sel1, col_sel2 = st.columns(2)
 with col_sel1:
     target_river = st.selectbox("河川を選択してください", list(RIVERS.keys()))
