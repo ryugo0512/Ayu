@@ -285,7 +285,7 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
     else:
         flood_risk = "🟢 安定：増水リスク低"
 
-    temp_peak_hours = len([t for t in hourly_water_temp if t >= 16.5])
+    temp_peak_hours = len([t for t in hourly_water_temp if t >= 18.0])
     temp_pts = 3 if temp_peak_hours >= 4 else (2 if temp_peak_hours >= 2 else 1)
     
     raw_score = int((moss_growth / 100) * 4) + clarity_score + temp_pts
@@ -450,12 +450,24 @@ chart_temp = alt.Chart(chart_df).mark_line(point=True).encode(
 
 st.altair_chart(chart_temp, use_container_width=True)
 
-best_hours = [i for i, t in enumerate(temp_data) if t >= 16.5]
+# 活性上向き（18℃以上）とベスト時合（20〜24℃）の判定
+upward_hours = [i for i, t in enumerate(temp_data) if t >= 18.0 and t < 20.0]
+best_hours = [i for i, t in enumerate(temp_data) if 20.0 <= t <= 24.0]
+over_hours = [i for i, t in enumerate(temp_data) if t > 24.0]
+
 if best_hours:
-    start_h, end_h = min(best_hours), max(best_hours)
-    st.success(f"🔥 **おすすめ時合**: **{start_h:02d}:00 ～ {end_h:02d}:00**（推計水温が16.5℃を超え、ハミ出し活性が高まる時間帯です）")
-else:
-    st.info("💡 **おすすめ時合**: 全体的に水温が低めです。日照が強まる **12:00 ～ 14:30** が集中ポイントとなります。")
+    b_start, b_end = min(best_hours), max(best_hours)
+    st.success(🔥 **ベスト時合 (20℃〜24℃)**: **{b_start:02d}:00 ～ {b_end:02d}:00**（追い・ハミ出しともに最高潮の黄金タイムです）)
+
+if upward_hours:
+    u_start, u_end = min(upward_hours), max(upward_hours)
+    st.info(📈 **活性上向き (18℃〜19.9℃)**: **{u_start:02d}:00 ～ {u_end:02d}:00**（ハミ出しや追いが活発になり始める時間帯です）)
+elif not best_hours:
+    st.warning("💡 **時合注意**: 全体的に水温が低めまたは高めの推移です。水温変化のタイミングを狙ってください。")
+
+if over_hours:
+    o_start, o_end = min(over_hours), max(over_hours)
+    st.warning(⚠️ **高水温注意 (24℃超)**: **{o_start:02d}:00 ～ {o_end:02d}:00**（高水温により鮎がヘバる可能性がある時間帯です）)
 
 # ---------------------------------------------------------
 # 10. 実釣ログ入力 & 削除管理機能
