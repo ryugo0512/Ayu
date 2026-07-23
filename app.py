@@ -301,6 +301,12 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
 
     score = max(1, min(raw_score, max_cap))
 
+    # 大幅な増水（30cm以上）の場合はおすすめ度を強制的に1に下げる
+    if level_diff >= 0.30:
+        score = 1
+    elif level_diff >= 0.15:
+        score = min(score, 3)
+
     df_hydro = df_weather.copy()
     df_hydro["base_level"] = river_info["base_level"]
 
@@ -323,7 +329,8 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
         "temp_min": temp_min,
         "water_temp_max": water_temp_max,
         "water_temp_avg": water_temp_avg,
-        "max_wind": max_wind
+        "max_wind": max_wind,
+        "level_diff": level_diff
     }
 
 # ---------------------------------------------------------
@@ -362,6 +369,12 @@ with col_alert2:
         st.warning(f"**コンディション**: {res['moss_alert']}")
     else:
         st.success(f"**コンディション**: {res['moss_alert']}")
+
+# 大幅な増水（30cm以上）の場合の警告表示
+if res["level_diff"] >= 0.30:
+    st.error(f"🚨 **危険（大幅な増水）**: 基準水位より **+{res['level_diff']*100:.0f}cm** の増水および強い濁りが予想されます。釣行は極めて危険なため見合わせてください。")
+elif res["level_diff"] >= 0.15:
+    st.warning(f"⚠️ **高水注意**: 基準水位より **+{res['level_diff']*100:.0f}cm** 高めです。立ち込みやポイント選定にご注意ください。")
 
 if res["max_wind"] >= 6.0:
     st.error(f"💨 **強風注意**: 予想最大風速 {res['max_wind']:.1f} m/s （長尺竿の操作・保持にご注意ください）")
@@ -450,7 +463,6 @@ chart_temp = alt.Chart(chart_df).mark_line(point=True).encode(
 
 st.altair_chart(chart_temp, use_container_width=True)
 
-# 活性上向き（18℃以上）とベスト時合（20〜24℃）の判定
 upward_hours = [i for i, t in enumerate(temp_data) if t >= 18.0 and t < 20.0]
 best_hours = [i for i, t in enumerate(temp_data) if 20.0 <= t <= 24.0]
 over_hours = [i for i, t in enumerate(temp_data) if t > 24.0]
