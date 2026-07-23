@@ -35,24 +35,28 @@ def delete_log(index):
         save_logs(logs)
 
 # ---------------------------------------------------------
-# 2. 河川・観測所データ設定
+# 2. 河川・観測所データ設定（水温補正パラメータ追加）
 # ---------------------------------------------------------
 RIVERS = {
     "尻別川本流（蘭越）": {
         "lat": 42.8021, "lon": 140.5251, "base_level": 1.20,
-        "stg_id": "3010312811020", "runoff_factor": 0.025, "decay_rate": 0.96, "drought_rate": 0.0005
+        "stg_id": "3010312811020", "runoff_factor": 0.025, "decay_rate": 0.96, "drought_rate": 0.0005,
+        "temp_base": 11.0, "temp_factor": 0.35, "max_temp": 21.5
     },
     "昆布川（昆布）": {
         "lat": 42.7958, "lon": 140.5986, "base_level": 0.80,
-        "stg_id": "3010312811040", "runoff_factor": 0.030, "decay_rate": 0.95, "drought_rate": 0.0005
+        "stg_id": "3010312811040", "runoff_factor": 0.030, "decay_rate": 0.95, "drought_rate": 0.0005,
+        "temp_base": 10.5, "temp_factor": 0.38, "max_temp": 21.0
     },
     "天ノ川（上ノ国）": {
         "lat": 41.7997, "lon": 140.1163, "base_level": 0.90,
-        "stg_id": "3010112811010", "runoff_factor": 0.030, "decay_rate": 0.97, "drought_rate": 0.0005
+        "stg_id": "3010112811010", "runoff_factor": 0.030, "decay_rate": 0.97, "drought_rate": 0.0005,
+        "temp_base": 12.0, "temp_factor": 0.40, "max_temp": 22.5
     },
     "朱太川（黒松内）": {
         "lat": 42.6683, "lon": 140.3061, "base_level": 0.70,
-        "stg_id": "3010312811050", "runoff_factor": 0.035, "decay_rate": 0.96, "drought_rate": 0.0005
+        "stg_id": "3010312811050", "runoff_factor": 0.035, "decay_rate": 0.96, "drought_rate": 0.0005,
+        "temp_base": 11.5, "temp_factor": 0.38, "max_temp": 22.0
     }
 }
 
@@ -152,7 +156,7 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
             "clarity_recovery": "清澄（良好）",
             "season_mode": "盛期",
             "score": 5,
-            "hourly_water_temp": [16 + i*0.5 for i in range(24)],
+            "hourly_water_temp": [15 + i*0.2 for i in range(24)],
             "df_hydro": pd.DataFrame(),
             "weather_desc": "データ取得不可",
             "temp_max": 20.0,
@@ -178,8 +182,9 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
         feedbacks = [l.get("moss_feedback", 0) for l in river_logs]
         bias_growth = np.mean(feedbacks) * 0.1
 
-    # 水温推計（外気温の75% + 基礎水温3度）
-    df_weather["estimated_water_temp"] = df_weather["temperature_2m"] * 0.75 + 3.0
+    # 水温推計（河川別の基礎水温＋気温応答率＋最大水温制限）
+    raw_water_temp = river_info["temp_base"] + (df_weather["temperature_2m"] * river_info["temp_factor"])
+    df_weather["estimated_water_temp"] = np.minimum(raw_water_temp, river_info["max_temp"])
 
     df_past = df_weather[df_weather["time"] <= target_datetime].copy()
     df_past["rain_12h"] = df_past["precipitation"].rolling(12, min_periods=1).sum()
@@ -226,7 +231,6 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
         hourly_water_temp = target_df["estimated_water_temp"].tolist()[:24]
         current_sim_level = target_df["simulated_level"].mean()
         
-        # 気象情報抽出
         most_code = target_df["weathercode"].mode()[0] if not target_df["weathercode"].empty else 0
         weather_desc = get_weather_desc(most_code)
         temp_max = target_df["temperature_2m"].max()
@@ -234,11 +238,11 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
         water_temp_max = max(hourly_water_temp)
         water_temp_avg = float(np.mean(hourly_water_temp))
     else:
-        hourly_water_temp = [15.0 + (i if i <= 14 else 28 - i) * 0.4 for i in range(24)]
+        hourly_water_temp = [14.0 + (i if i <= 14 else 28 - i) * 0.3 for i in range(24)]
         current_sim_level = real_level if real_level is not None else river_info["base_level"]
         weather_desc = "☀️ 晴れ"
         temp_max, temp_min = 22.0, 16.0
-        water_temp_max, water_temp_avg = 18.5, 16.8
+        water_temp_max, water_temp_avg = 17.5, 15.8
 
     level_diff = current_sim_level - river_info["base_level"]
     if level_diff < -0.08:
@@ -266,7 +270,7 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
     else:
         flood_risk = "🟢 安定：増水リスク低"
 
-    temp_peak_hours = len([t for t in hourly_water_temp if t >= 17.0])
+    temp_peak_hours = len([t for t in hourly_water_temp if t >= 16.5])
     temp_pts = 3 if temp_peak_hours >= 4 else (2 if temp_peak_hours >= 2 else 1)
     
     raw_score = int((moss_growth / 100) * 4) + clarity_score + temp_pts
@@ -351,7 +355,7 @@ label_water = "実測" if res["level_is_real"] else "推測"
 col1.metric(f"水位 ({label_water})", f"{res['water_level']:.2f} m", res["level_trend"])
 col2.metric("天気", res["weather_desc"])
 col3.metric("予想気温", f"{res['temp_max']:.1f}℃", f"最低 {res['temp_min']:.1f}℃")
-col4.metric("予想水温", f"{res['water_temp_max']:.1f}℃", f"平均 {res['water_temp_avg']:.1f}℃")
+col4.metric("推計水温", f"{res['water_temp_max']:.1f}℃", f"平均 {res['water_temp_avg']:.1f}℃")
 col5.metric("ハミ垢生育度", f"{res['moss_growth']} %")
 
 st.write(f"**濁り・澄み具合予測**: {res['clarity_recovery']}")
@@ -394,10 +398,10 @@ chart_df = pd.DataFrame({
 
 st.line_chart(chart_df)
 
-best_hours = [i for i, t in enumerate(temp_data) if t >= 17.0]
+best_hours = [i for i, t in enumerate(temp_data) if t >= 16.5]
 if best_hours:
     start_h, end_h = min(best_hours), max(best_hours)
-    st.success(f"🔥 **おすすめ時合**: **{start_h:02d}:00 ～ {end_h:02d}:00**（推計水温が17℃を超え、ハミ出し活性が最大化します）")
+    st.success(f"🔥 **おすすめ時合**: **{start_h:02d}:00 ～ {end_h:02d}:00**（推計水温が16.5℃を超え、ハミ出し活性が高まる時間帯です）")
 else:
     st.info("💡 **おすすめ時合**: 全体的に水温が低めです。日照が強まる **12:00 ～ 14:30** が集中ポイントとなります。")
 
@@ -408,7 +412,14 @@ st.markdown("---")
 st.subheader("📝 実釣ログの記録（学習用）")
 
 with st.form("log_form"):
-    log_date = st.date_input("釣行日", today_date)
+    col_log1, col_log2 = st.columns(2)
+    with col_log1:
+        log_date = st.date_input("釣行日", today_date)
+    with col_log2:
+        river_keys = list(RIVERS.keys())
+        default_index = river_keys.index(target_river) if target_river in river_keys else 0
+        selected_log_river = st.selectbox("釣行河川", river_keys, index=default_index)
+
     catch_count = st.number_input("釣果（匹）", min_value=0, max_value=200, value=10)
     moss_condition = st.select_slider(
         "実際のハミ垢の状況",
@@ -422,7 +433,7 @@ with st.form("log_form"):
     if submitted:
         log_entry = {
             "date": str(log_date),
-            "river": target_river,
+            "river": selected_log_river,
             "catch": catch_count,
             "moss_condition": moss_condition,
             "moss_feedback": feedback_map[moss_condition]
@@ -436,7 +447,7 @@ if user_logs:
         for idx, log in enumerate(user_logs):
             c1, c2, c3, c4, c5 = st.columns([2, 3, 2, 3, 2])
             c1.write(f"📅 {log.get('date')}")
-            c2.write(f"🌊 {log.get('river')}")
+            c2.write(f"🌊 {log.get('river', '未設定')}")
             c3.write(f"🐟 {log.get('catch')} 匹")
             c4.write(f"🪨 {log.get('moss_condition')}")
             if c5.button("削除", key=f"del_{idx}"):
