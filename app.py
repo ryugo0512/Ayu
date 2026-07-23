@@ -39,25 +39,29 @@ RIVERS = {
         "lat": 42.8021, "lon": 140.5251, "base_level": 1.81, "default_actual": 1.81,
         "station_name": "名駒", "river_system": "尻別川水系 尻別川",
         "weather_url": "https://weathernews.jp/onebox/river/shiribetsugawa/?pid=2078700400005",
-        "temp_base": 11.0, "temp_factor": 0.35, "max_temp": 21.5
+        "temp_base": 11.0, "temp_factor": 0.35, "max_temp": 21.5,
+        "decay_rate": 0.9975
     },
     "昆布川（昆布）": {
         "lat": 42.7958, "lon": 140.5986, "base_level": 43.58, "default_actual": 43.58,
         "station_name": "昆布川橋", "river_system": "尻別川水系 昆布川",
         "weather_url": "https://weathernews.jp/onebox/river/shiribetsugawa/?pid=0025700400389",
-        "temp_base": 10.5, "temp_factor": 0.38, "max_temp": 21.0
+        "temp_base": 10.5, "temp_factor": 0.38, "max_temp": 21.0,
+        "decay_rate": 0.9970
     },
     "天ノ川（上ノ国）": {
         "lat": 41.7997, "lon": 140.1163, "base_level": 1.60, "default_actual": 1.60,
         "station_name": "古守大橋", "river_system": "天ノ川水系 天ノ川",
         "weather_url": "https://weathernews.jp/onebox/river/?pid=0025700400132",
-        "temp_base": 12.0, "temp_factor": 0.40, "max_temp": 22.5
+        "temp_base": 12.0, "temp_factor": 0.40, "max_temp": 22.5,
+        "decay_rate": 0.9975
     },
     "朱太川（黒松内）": {
         "lat": 42.6683, "lon": 140.3061, "base_level": 1.44, "default_actual": 1.44,
         "station_name": "朱太川実橋", "river_system": "朱太川水系 朱太川",
         "weather_url": "https://weathernews.jp/onebox/river/shubutogawa/?pid=0025700400387",
-        "temp_base": 11.5, "temp_factor": 0.38, "max_temp": 22.0
+        "temp_base": 11.5, "temp_factor": 0.38, "max_temp": 22.0,
+        "decay_rate": 0.9972
     }
 }
 
@@ -154,7 +158,7 @@ def get_weather_desc(code):
     else:
         return "☁️ 曇り"
 
-def simulate_water_levels(df_weather, base_level, current_actual):
+def simulate_water_levels(df_weather, base_level, current_actual, river_decay_rate):
     if df_weather is None or df_weather.empty or "precipitation" not in df_weather.columns:
         df_weather = pd.DataFrame({
             "time": [pd.Timestamp.now()],
@@ -168,7 +172,7 @@ def simulate_water_levels(df_weather, base_level, current_actual):
         return df_weather
 
     max_recent_rain = df_weather.tail(168)["precipitation"].max() if len(df_weather) >= 168 else 0.0
-    decay_rate = 0.992 if max_recent_rain > 20.0 else 0.996
+    decay_rate = river_decay_rate if max_recent_rain <= 20.0 else river_decay_rate - 0.003
     runoff_factor = 0.020 if max_recent_rain > 20.0 else 0.028
     
     initial_runoff = current_actual - base_level
@@ -213,8 +217,9 @@ def simulate_water_levels(df_weather, base_level, current_actual):
 
 def analyze_condition(df_weather, is_weather_live, river_info, user_logs, target_river, target_date, current_actual):
     effective_base = river_info["base_level"]
+    river_decay_rate = river_info.get("decay_rate", 0.997)
 
-    df_weather = simulate_water_levels(df_weather, effective_base, current_actual)
+    df_weather = simulate_water_levels(df_weather, effective_base, current_actual, river_decay_rate)
 
     target_datetime = datetime.datetime.combine(target_date, datetime.time(12, 0))
 
