@@ -530,4 +530,9 @@ if user_logs:
             c1, c2, c3, c4, c5 = st.columns([2, 3, 2, 3, 2])
             c1.write(f"📅 {log.get('date')}")
             c2.write(f"🌊 {log.get('river', '未設定')}")
-            c3.write(f"🐟 {log.get('ca
+            c3.write(f"🐟 {log.get('catch')} 匹")
+            c4.write(f"🪨 {log.get('moss_condition')}")
+            if c5.button("削除", key=f"del_{idx}"):
+                delete_log(idx)
+                st.success("ログを削除しました。")
+                st.rerun()
