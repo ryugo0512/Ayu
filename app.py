@@ -29,10 +29,10 @@ def save_log(log_entry):
 # 2. 河川・観測所データ設定
 # ---------------------------------------------------------
 RIVERS = {
-    "尻別川本流（蘭越）": {"lat": 42.8021, "lon": 140.5251, "base_level": 1.20, "flood_threshold": 0.60},
-    "昆布川（昆布）": {"lat": 42.7958, "lon": 140.5986, "base_level": 0.80, "flood_threshold": 0.50},
-    "天ノ川（上ノ国）": {"lat": 41.7997, "lon": 140.1163, "base_level": 0.90, "flood_threshold": 0.50},
-    "朱太川（黒松内）": {"lat": 42.6683, "lon": 140.3061, "base_level": 0.70, "flood_threshold": 0.45}
+    "尻別川本流（蘭越）": {"lat": 42.8021, "lon": 140.5251, "base_level": 1.20, "runoff_factor": 0.015, "decay_rate": 0.85},
+    "昆布川（昆布）": {"lat": 42.7958, "lon": 140.5986, "base_level": 0.80, "runoff_factor": 0.020, "decay_rate": 0.80},
+    "天ノ川（上ノ国）": {"lat": 41.7997, "lon": 140.1163, "base_level": 0.90, "runoff_factor": 0.018, "decay_rate": 0.82},
+    "朱太川（黒松内）": {"lat": 42.6683, "lon": 140.3061, "base_level": 0.70, "runoff_factor": 0.022, "decay_rate": 0.78}
 }
 
 # ---------------------------------------------------------
@@ -51,7 +51,24 @@ def fetch_weather_and_hydro(lat, lon):
         return None
 
 # ---------------------------------------------------------
-# 4. 解析・AI補正エンジン
+# 4. 水位推移シミュレーション（ハイドログラフAI推計）
+# ---------------------------------------------------------
+def simulate_water_levels(df_weather, base_level, runoff_factor, decay_rate):
+    """降雨量から過去〜未来の連続水位変化を試算"""
+    levels = []
+    current_runoff = 0.0
+    
+    for idx, row in df_weather.iterrows():
+        rain = row["precipitation"]
+        # 降雨による増水量の加算と、時間経過による減水（引き水）モデル
+        current_runoff = current_runoff * decay_rate + (rain * runoff_factor)
+        levels.append(base_level + current_runoff)
+        
+    df_weather["simulated_level"] = levels
+    return df_weather
+
+# ---------------------------------------------------------
+# 5. 解析・AI補正エンジン
 # ---------------------------------------------------------
 def analyze_condition(df_weather, river_info, user_logs, target_river, target_date):
     if df_weather is None or df_weather.empty:
@@ -60,12 +77,21 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
             "level_trend": "平水（安定）",
             "days_since_flood": 4,
             "moss_growth": 60,
-            "moss_alert": "良好",
-            "flood_risk": "低",
-            "clarity_recovery": "良好（澄み）",
+            "moss_alert": "✅ 新垢形成中（良好）",
+            "flood_risk": "🟢 安定：増水リスク低",
+            "clarity_recovery": "清澄（良好）",
             "season_mode": "盛期",
-            "hourly_water_temp": [16 + i*0.5 for i in range(24)]
+            "hourly_water_temp": [16 + i*0.5 for i in range(24)],
+            "df_hydro": pd.DataFrame()
         }
+
+    # 水位シミュレーションの計算
+    df_weather = simulate_water_levels(
+        df_weather, 
+        river_info["base_level"], 
+        river_info["runoff_factor"], 
+        river_info["decay_rate"]
+    )
 
     target_datetime = datetime.datetime.combine(target_date, datetime.time(12, 0))
 
@@ -79,11 +105,12 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
     # 推定水温
     df_weather["estimated_water_temp"] = df_weather["temperature_2m"] * 0.75 + 3.0
 
-    # 全飛び（大増水）判定基準の再定義：1時間5mm以上、または12時間積算15mm以上
+    # 【全飛び判定の再調整】昨日の小雨を除外するため基準を引き上げ
+    # 基準：12時間積算降雨 35mm以上、または 1時間降雨 15mm以上
     df_past = df_weather[df_weather["time"] <= target_datetime].copy()
     df_past["rain_12h"] = df_past["precipitation"].rolling(12, min_periods=1).sum()
     
-    heavy_rain_events = df_past[(df_past["precipitation"] >= 5.0) | (df_past["rain_12h"] >= 15.0)]
+    heavy_rain_events = df_past[(df_past["precipitation"] >= 15.0) | (df_past["rain_12h"] >= 35.0)]
 
     if not heavy_rain_events.empty:
         last_flood_time = heavy_rain_events["time"].max()
@@ -91,7 +118,7 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
     else:
         days_since_flood = 10
 
-    # 濁り回復日数判定
+    # 濁り回復判定
     target_24h_rain = df_past.tail(24)["precipitation"].sum()
     if target_24h_rain > 30:
         clarity_recovery = "笹濁り（回復途上）"
@@ -100,7 +127,7 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
     else:
         clarity_recovery = "清澄（良好）"
 
-    # シーズンモード判定
+    # シーズンモード
     if target_date.month == 9 and target_date.day >= 1:
         season_mode = "終盤（再生遅延モード）"
         growth_rate = 10.0
@@ -111,8 +138,10 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
     # ハミ垢生育度
     moss_growth = min(100, int((days_since_flood * growth_rate) * (1.0 + bias_growth)))
 
-    # アカ腐りアラート
-    if days_since_flood > 12 and target_24h_rain < 5.0:
+    # コンディション判定
+    if days_since_flood <= 1 or moss_growth < 20:
+        moss_alert = "🚫 全飛び直後（垢ナシ・石白っぽい）"
+    elif days_since_flood > 12 and target_24h_rain < 5.0:
         moss_alert = "⚠️ 垢腐り・泥垢注意（高水温・長期間渇水）"
     else:
         moss_alert = "✅ 新垢形成中（良好）"
@@ -120,22 +149,29 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
     # 全飛び警戒アラート
     df_future = df_weather[df_weather["time"] >= target_datetime].head(24)
     future_rain = df_future["precipitation"].sum()
-    if future_rain > 30.0:
+    if future_rain > 35.0:
         flood_risk = "🚨 警戒：全飛び（大増水）リスク高"
     elif future_rain > 15.0:
         flood_risk = "⚠️ 注意：雨による増水の可能性あり"
     else:
         flood_risk = "🟢 安定：増水リスク低"
 
-    # 対象日の1時間ごと推計水温
+    # 対象日の水温
     target_df = df_weather[df_weather["time"].dt.date == target_date]
     if not target_df.empty and len(target_df) >= 24:
         hourly_water_temp = target_df["estimated_water_temp"].tolist()[:24]
+        current_sim_level = target_df["simulated_level"].mean()
     else:
         hourly_water_temp = [15.0 + (i if i <= 14 else 28 - i) * 0.4 for i in range(24)]
+        current_sim_level = river_info["base_level"]
+
+    # 水位推移用データフレーム（直近2日〜釣行日当日終わりまで）
+    start_time = pd.to_datetime(datetime.date.today() - datetime.timedelta(days=2))
+    end_time = pd.to_datetime(target_date + datetime.timedelta(days=1))
+    df_hydro = df_weather[(df_weather["time"] >= start_time) & (df_weather["time"] < end_time)].copy()
 
     return {
-        "water_level": river_info["base_level"] + (target_24h_rain * 0.01),
+        "water_level": current_sim_level,
         "level_trend": "減水傾向（引き水）" if target_24h_rain < 2.0 else "平水〜微増",
         "days_since_flood": days_since_flood,
         "moss_growth": moss_growth,
@@ -143,11 +179,12 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
         "flood_risk": flood_risk,
         "clarity_recovery": clarity_recovery,
         "season_mode": season_mode,
-        "hourly_water_temp": hourly_water_temp
+        "hourly_water_temp": hourly_water_temp,
+        "df_hydro": df_hydro
     }
 
 # ---------------------------------------------------------
-# 5. UI（メイン画面）
+# 6. UI（メイン画面）
 # ---------------------------------------------------------
 st.title("🐟 北海道 鮎コンディション判定 & 未来予測")
 
@@ -178,7 +215,7 @@ col_alert1, col_alert2 = st.columns(2)
 with col_alert1:
     st.info(f"**全飛びリスク判定**: {res['flood_risk']}")
 with col_alert2:
-    if "⚠️" in res["moss_alert"]:
+    if "⚠️" in res["moss_alert"] or "🚫" in res["moss_alert"]:
         st.warning(f"**コンディション**: {res['moss_alert']}")
     else:
         st.success(f"**コンディション**: {res['moss_alert']}")
@@ -193,7 +230,20 @@ col4.metric("シーズンモード", res["season_mode"])
 st.write(f"**濁り・澄み具合予測**: {res['clarity_recovery']}")
 
 # ---------------------------------------------------------
-# 6. 当日の時合・活性タイムライン
+# 7. AI推測水位グラフ（直近2日〜釣行日）
+# ---------------------------------------------------------
+st.markdown("---")
+st.subheader("📊 AI推測水位グラフ（直近2日 ～ 釣行予定日）")
+
+if not res["df_hydro"].empty:
+    chart_hydro = res["df_hydro"][["time", "simulated_level"]].copy()
+    chart_hydro["時間"] = chart_hydro["time"].dt.strftime("%m/%d %H時")
+    chart_hydro = chart_hydro.rename(columns={"simulated_level": "推測水位(m)"}).set_index("時間")
+    st.line_chart(chart_hydro["推測水位(m)"])
+    st.caption("※ 過去の雨量および今後の天気予報に基づく降雨応答シミュレーション値です。")
+
+# ---------------------------------------------------------
+# 8. 当日の時合・活性タイムライン
 # ---------------------------------------------------------
 st.markdown("---")
 st.subheader("⏰ 釣行日の水温推移 & ベスト時合予測")
@@ -216,7 +266,7 @@ else:
     st.info("💡 **おすすめ時合**: 全体的に水温が低めです。日照が強まる **12:00 ～ 14:30** が集中ポイントとなります。")
 
 # ---------------------------------------------------------
-# 7. 実釣ログ入力
+# 9. 実釣ログ入力
 # ---------------------------------------------------------
 st.markdown("---")
 st.subheader("📝 実釣ログの記録（学習用）")
