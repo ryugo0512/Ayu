@@ -372,7 +372,9 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
         "water_temp_avg": water_temp_avg,
         "max_wind": max_wind,
         "level_diff": level_diff
- # ---------------------------------------------------------
+    }
+
+# ---------------------------------------------------------
 # 7. UI（メイン画面）
 # ---------------------------------------------------------
 st.title("🐟 北海道 鮎コンディション判定 & 未来予測")
@@ -572,4 +574,3 @@ if user_logs:
                 delete_log(idx)
                 st.success("ログを削除しました。")
                 st.rerun()
-   }
