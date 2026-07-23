@@ -5,6 +5,7 @@ import datetime
 import json
 import os
 import requests
+import altair as alt
 
 # ---------------------------------------------------------
 # 1. 基本設定とデータ永続化（実釣ログ保存・削除）
@@ -65,7 +66,6 @@ RIVERS = {
 # ---------------------------------------------------------
 @st.cache_data(ttl=3600)
 def fetch_weather_and_hydro(lat, lon):
-    # windspeed_unit=ms を明示指定
     url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=temperature_2m,precipitation,weathercode,sunshine_duration,shortwave_radiation,windspeed_10m&windspeed_unit=ms&past_days=14&forecast_days=7&timezone=Asia%2FTokyo"
     try:
         res = requests.get(url, timeout=10)
@@ -427,7 +427,7 @@ if not res["df_hydro"].empty:
     st.caption("※ 過去実績：国交省実測値ベース ／ 天気予報AI予測：最新の気象予報（雨量・気温）を基にしたAIシミュレーション値 ／ 平常基準水位：河川の基準線")
 
 # ---------------------------------------------------------
-# 9. 当日の時合・活性タイムライン
+# 9. 当日の時合・活性タイムライン（Y軸スケール10℃〜30℃固定）
 # ---------------------------------------------------------
 st.markdown("---")
 st.subheader("⏰ 釣行日の水温推移 & ベスト時合予測")
@@ -438,9 +438,17 @@ hours = [f"{i:02d}:00" for i in range(24)]
 chart_df = pd.DataFrame({
     "時刻": hours,
     "推計水温(℃)": temp_data
-}).set_index("時刻")
+})
 
-st.line_chart(chart_df)
+chart_temp = alt.Chart(chart_df).mark_line(point=True).encode(
+    x=alt.X("時刻:N", sort=None, axis=alt.Axis(labelAngle=0)),
+    y=alt.Y("推計水温(℃):Q", scale=alt.Scale(domain=[10, 30])),
+    tooltip=["時刻", "推計水温(℃)"]
+).properties(
+    height=300
+)
+
+st.altair_chart(chart_temp, use_container_width=True)
 
 best_hours = [i for i, t in enumerate(temp_data) if t >= 16.5]
 if best_hours:
