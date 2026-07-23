@@ -75,14 +75,24 @@ def fetch_weather_water_level(url, default_val):
     try:
         res = requests.get(url, headers=headers, timeout=5)
         res.raise_for_status()
+        text = res.text
         
-        match = re.search(r'現在(?:水位)?[^0-9]*([0-9]+\.[0-9]{2})\s*m', res.text)
+        # 1. 「時点」の直後にある現在水位（例: 17:20時点 1.74m）を抽出
+        match = re.search(r'時点[^\d]*?(\d+\.\d{2})\s*m', text)
         if match:
             val = float(match.group(1))
             if 0.0 <= val <= 100.0:
                 return val, "ウェザーニュース (自動取得)"
                 
-        matches = re.findall(r'([0-9]+\.[0-9]{2})\s*m', res.text)
+        # 2. 「現在水位」「水位情報」周辺の文字から抽出
+        match = re.search(r'(?:現在水位|水位情報|現在)[^\d]*?(\d+\.\d{2})\s*m', text)
+        if match:
+            val = float(match.group(1))
+            if 0.0 <= val <= 100.0:
+                return val, "ウェザーニュース (自動取得)"
+
+        # 3. ページ内の数値から最も基準値に近い値を抽出
+        matches = re.findall(r'(\d+\.\d{2})\s*m', text)
         if matches:
             valid_values = [float(m) for m in matches if 0.0 <= float(m) <= 100.0]
             if valid_values:
