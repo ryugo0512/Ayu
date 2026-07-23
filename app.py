@@ -95,9 +95,7 @@ def fetch_weather_water_level(url, default_val):
         
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        # ウェザーニュースの水位表示要素を探索（class名やテキスト構造に対応）
-        # 水位の数値が含まれる要素を柔軟に取得
-        for elem in soup.find_all(text=re.compile(r'[0-9]+\.[0-9]+\s*m')):
+        for elem in soup.find_all(string=re.compile(r'[0-9]+\.[0-9]+\s*m')):
             parent_text = elem.parent.get_text()
             match = re.search(r'([0-9]+\.[0-9]{2})\s*m', parent_text)
             if match:
@@ -105,7 +103,6 @@ def fetch_weather_water_level(url, default_val):
                 if 0.0 <= val <= 100.0:
                     return val, "ウェザーニュース (自動取得)"
 
-        # 該当が見つからない場合は正規表現でHTML全体から探索
         matches = re.findall(r'([0-9]+\.[0-9]{2})\s*m', res.text)
         if matches:
             for m in matches:
@@ -375,7 +372,7 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
         "water_temp_avg": water_temp_avg,
         "max_wind": max_wind,
         "level_diff": level_diff
-    }# ---------------------------------------------------------
+ # ---------------------------------------------------------
 # 7. UI（メイン画面）
 # ---------------------------------------------------------
 st.title("🐟 北海道 鮎コンディション判定 & 未来予測")
@@ -575,4 +572,4 @@ if user_logs:
                 delete_log(idx)
                 st.success("ログを削除しました。")
                 st.rerun()
-
+   }
