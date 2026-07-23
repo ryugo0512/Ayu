@@ -190,17 +190,6 @@ def simulate_water_levels(df_weather, base_level, current_actual, river_decay_ra
     history = load_water_history().get(river_name, {})
 
     now = pd.Timestamp.now().floor("h")
-    
-    runoffs = np.zeros(len(df_weather))
-    effective_rain = 0.0
-    eff_decay = np.exp(-np.log(2) / 48.0)
-    runoff_factor = 0.035
-
-    for i in range(len(df_weather)):
-        rain = df_weather.loc[i, "precipitation"]
-        effective_rain = effective_rain * eff_decay + rain
-        runoffs[i] = rain * runoff_factor + effective_rain * 0.001
-
     time_diffs = (df_weather["time"] - now).abs()
     now_idx = int(time_diffs.idxmin())
 
@@ -217,9 +206,17 @@ def simulate_water_levels(df_weather, base_level, current_actual, river_decay_ra
 
     simulated_levels[now_idx] = current_actual
 
+    # 未来のシミュレーションは現在の実測値(current_actual)を起点とし、未来の雨のみで計算する
     curr_lvl = current_actual
+    eff_decay = np.exp(-np.log(2) / 48.0)
+    runoff_factor = 0.035
+    fut_eff_rain = 0.0
+
     for i in range(now_idx + 1, len(df_weather)):
-        rain_imp = runoffs[i]
+        rain = df_weather.loc[i, "precipitation"]
+        fut_eff_rain = fut_eff_rain * eff_decay + rain
+        rain_imp = rain * runoff_factor + fut_eff_rain * 0.001
+
         diff_from_base = curr_lvl - base_level
         if diff_from_base > 0:
             next_diff = diff_from_base * river_decay_rate + rain_imp
@@ -408,17 +405,6 @@ def analyze_condition(df_weather, is_weather_live, river_info, user_logs, target
     }
 
 st.title("北海道 鮎コンディション判定 & 未来予測")
-
-# サイドバーにリセットボタンを配置
-with st.sidebar:
-    st.header("管理メニュー")
-    if st.button("水位履歴データをリセット"):
-        if os.path.exists(WATER_LOG_FILE):
-            os.remove(WATER_LOG_FILE)
-            st.success("水位履歴をリセットしました！")
-            st.rerun()
-        else:
-            st.info("リセットする履歴データはありません。")
 
 col_sel1, col_sel2 = st.columns(2)
 with col_sel1:
