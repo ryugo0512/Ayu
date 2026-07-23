@@ -26,13 +26,13 @@ def save_log(log_entry):
         json.dump(logs, f, ensure_ascii=False, indent=2)
 
 # ---------------------------------------------------------
-# 2. 河川・観測所データ設定
+# 2. 河川・観測所データ設定（引き水を緩やかに・渇水ペースを大幅減速）
 # ---------------------------------------------------------
 RIVERS = {
-    "尻別川本流（蘭越）": {"lat": 42.8021, "lon": 140.5251, "base_level": 1.20, "runoff_factor": 0.015, "decay_rate": 0.85, "drought_rate": 0.003},
-    "昆布川（昆布）": {"lat": 42.7958, "lon": 140.5986, "base_level": 0.80, "runoff_factor": 0.020, "decay_rate": 0.80, "drought_rate": 0.004},
-    "天ノ川（上ノ国）": {"lat": 41.7997, "lon": 140.1163, "base_level": 0.90, "runoff_factor": 0.018, "decay_rate": 0.82, "drought_rate": 0.004},
-    "朱太川（黒松内）": {"lat": 42.6683, "lon": 140.3061, "base_level": 0.70, "runoff_factor": 0.022, "decay_rate": 0.78, "drought_rate": 0.005}
+    "尻別川本流（蘭越）": {"lat": 42.8021, "lon": 140.5251, "base_level": 1.20, "runoff_factor": 0.025, "decay_rate": 0.92, "drought_rate": 0.0010},
+    "昆布川（昆布）": {"lat": 42.7958, "lon": 140.5986, "base_level": 0.80, "runoff_factor": 0.030, "decay_rate": 0.88, "drought_rate": 0.0012},
+    "天ノ川（上ノ国）": {"lat": 41.7997, "lon": 140.1163, "base_level": 0.90, "runoff_factor": 0.028, "decay_rate": 0.90, "drought_rate": 0.0010},
+    "朱太川（黒松内）": {"lat": 42.6683, "lon": 140.3061, "base_level": 0.70, "runoff_factor": 0.032, "decay_rate": 0.89, "drought_rate": 0.0012}
 }
 
 # ---------------------------------------------------------
@@ -51,7 +51,7 @@ def fetch_weather_and_hydro(lat, lon):
         return None
 
 # ---------------------------------------------------------
-# 4. 水位推移シミュレーション（増水・渇水両対応）
+# 4. 水位推移シミュレーション（引き水保持・自然減水調整版）
 # ---------------------------------------------------------
 def simulate_water_levels(df_weather, base_level, runoff_factor, decay_rate, drought_rate):
     levels = []
@@ -62,16 +62,16 @@ def simulate_water_levels(df_weather, base_level, runoff_factor, decay_rate, dro
         rain = row["precipitation"]
         temp = row["temperature_2m"]
         
-        if rain > 0.5:
+        if rain > 0.2:
             dry_hours = 0
             current_runoff = current_runoff * decay_rate + (rain * runoff_factor)
             drought_offset = 0.0
         else:
             dry_hours += 1
             current_runoff = current_runoff * decay_rate
-            # 晴天・高温時の減水（渇水）モデル：無降雨時間と気温に応じて基準水位以下へ減少
-            temp_penalty = max(1.0, temp / 20.0)
-            drought_offset = min(0.30, dry_hours * drought_rate * temp_penalty)
+            # 渇水ペナルティを非常にマイルド（実効値へ補正）に設定
+            temp_penalty = max(1.0, temp / 22.0)
+            drought_offset = min(0.20, dry_hours * drought_rate * temp_penalty)
             
         calculated_level = base_level + current_runoff - drought_offset
         levels.append(calculated_level)
@@ -98,7 +98,6 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
             "df_hydro": pd.DataFrame()
         }
 
-    # 増水・渇水対応シミュレーション実行
     df_weather = simulate_water_levels(
         df_weather, 
         river_info["base_level"], 
@@ -170,12 +169,12 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
         hourly_water_temp = [15.0 + (i if i <= 14 else 28 - i) * 0.4 for i in range(24)]
         current_sim_level = river_info["base_level"]
 
-    # 水位トレンド判定（渇水判定を含む）
+    # 水位トレンド判定
     level_diff = current_sim_level - river_info["base_level"]
     if level_diff < -0.08:
         level_trend = "📉 渇水傾向（減水）"
-    elif level_diff > 0.10:
-        level_trend = "📈 増水傾向"
+    elif level_diff > 0.05:
+        level_trend = f"📈 高水・引き水（+{level_diff*100:.0f}cm）"
     else:
         level_trend = "平水（安定）"
 
