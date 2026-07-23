@@ -109,7 +109,7 @@ def fetch_weather_water_level(url, default_val):
 
 @st.cache_data(ttl=3600)
 def fetch_weather_data(lat, lon):
-    url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=temperature_2m,precipitation,weathercode,sunshine_duration,shortwave_radiation,windspeed_10m&windspeed_unit=ms&past_days=7&forecast_days=3&timezone=Asia%2FTokyo"
+    url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=temperature_2m,precipitation,weathercode,sunshine_duration,shortwave_radiation,windspeed_10m&windspeed_unit=ms&past_days=7&forecast_days=16&timezone=Asia%2FTokyo"
     
     for attempt in range(2):
         try:
@@ -119,7 +119,7 @@ def fetch_weather_data(lat, lon):
             if "hourly" in data:
                 df = pd.DataFrame(data["hourly"])
                 df["time"] = pd.to_datetime(df["time"])
-                return df
+                return df, True
         except Exception:
             if attempt == 0:
                 time.sleep(5)
@@ -127,7 +127,7 @@ def fetch_weather_data(lat, lon):
                 pass
     
     now = pd.Timestamp.now().floor("h")
-    date_range = pd.date_range(end=now + pd.Timedelta(days=3), periods=24*10, freq="h")
+    date_range = pd.date_range(end=now + pd.Timedelta(days=16), periods=24*16, freq="h")
     df_dummy = pd.DataFrame({
         "time": date_range,
         "temperature_2m": 20.0,
@@ -136,7 +136,7 @@ def fetch_weather_data(lat, lon):
         "shortwave_radiation": 200.0,
         "windspeed_10m": 2.0
     })
-    return df_dummy
+    return df_dummy, False
 
 def get_weather_desc(code):
     if code in [0]:
@@ -211,12 +211,16 @@ def simulate_water_levels(df_weather, base_level, current_actual):
     df_weather["simulated_level"] = final_levels
     return df_weather
 
-def analyze_condition(df_weather, river_info, user_logs, target_river, target_date, current_actual):
+def analyze_condition(df_weather, is_weather_live, river_info, user_logs, target_river, target_date, current_actual):
     effective_base = river_info["base_level"]
 
     df_weather = simulate_water_levels(df_weather, effective_base, current_actual)
 
     target_datetime = datetime.datetime.combine(target_date, datetime.time(12, 0))
+
+    # ターゲット日のデータが存在するか確認
+    target_df = df_weather[df_weather["time"].dt.date == target_date].copy() if "time" in df_weather.columns else pd.DataFrame()
+    has_precipitation_data = is_weather_live and not target_df.empty and len(target_df) >= 24
 
     bias_growth = 0.0
     river_logs = [l for l in user_logs if l.get("river") == target_river]
@@ -275,7 +279,6 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
 
     moss_growth = min(100, int((days_since_flood * growth_rate * radiation_factor) * (1.0 + bias_growth)))
 
-    target_df = df_weather[df_weather["time"].dt.date == target_date].copy() if "time" in df_weather.columns else pd.DataFrame()
     if not target_df.empty and len(target_df) >= 24:
         hourly_water_temp = target_df["estimated_water_temp"].tolist()[:24]
         
@@ -376,7 +379,8 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
         "water_temp_max": water_temp_max,
         "water_temp_avg": water_temp_avg,
         "max_wind": max_wind,
-        "level_diff": level_diff
+        "level_diff": level_diff,
+        "has_precipitation_data": has_precipitation_data
     }
 
 st.title("北海道 鮎コンディション判定 & 未来予測")
@@ -399,9 +403,12 @@ with col_caption2:
     if river_info["weather_url"]:
         st.markdown(f"[ウェザーニュースページ]({river_info['weather_url']})")
 
-df_weather = fetch_weather_data(river_info["lat"], river_info["lon"])
+df_weather, is_weather_live = fetch_weather_data(river_info["lat"], river_info["lon"])
 user_logs = load_logs()
-res = analyze_condition(df_weather, river_info, user_logs, target_river, target_date, current_actual)
+res = analyze_condition(df_weather, is_weather_live, river_info, user_logs, target_river, target_date, current_actual)
+
+if not res["has_precipitation_data"]:
+    st.warning("⚠️ 選択された日程の信頼できる降水データがありません（予報範囲外または通信エラー）。水位シミュレーションは降水量を0として計算しています。")
 
 st.markdown("---")
 
