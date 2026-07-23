@@ -44,28 +44,21 @@ RIVERS = {
     "昆布川（昆布）": {
         "lat": 42.7958, "lon": 140.5986, "base_level": 43.58, "default_actual": 43.58,
         "station_name": "昆布川橋", "river_system": "尻別川水系 昆布川",
-        "weather_url": "",
+        "weather_url": "https://weathernews.jp/onebox/river/shiribetsugawa/?pid=0025700400389",
         "runoff_factor": 0.030, "decay_rate": 0.95, "drought_rate": 0.0005,
         "temp_base": 10.5, "temp_factor": 0.38, "max_temp": 21.0
     },
     "天ノ川（上ノ国）": {
         "lat": 41.7997, "lon": 140.1163, "base_level": 1.60, "default_actual": 1.60,
         "station_name": "古守大橋", "river_system": "天ノ川水系 天ノ川",
-        "weather_url": "",
+        "weather_url": "https://weathernews.jp/onebox/river/?pid=0025700400132",
         "runoff_factor": 0.030, "decay_rate": 0.97, "drought_rate": 0.0005,
         "temp_base": 12.0, "temp_factor": 0.40, "max_temp": 22.5
-    },
-    "上ノ沢川（天ノ川水系）": {
-        "lat": 41.7554, "lon": 140.2321, "base_level": 1.74, "default_actual": 1.74,
-        "station_name": "上ノ沢橋", "river_system": "天ノ川水系 上ノ沢川",
-        "weather_url": "",
-        "runoff_factor": 0.028, "decay_rate": 0.96, "drought_rate": 0.0005,
-        "temp_base": 11.8, "temp_factor": 0.39, "max_temp": 22.0
     },
     "朱太川（黒松内）": {
         "lat": 42.6683, "lon": 140.3061, "base_level": 22.94, "default_actual": 22.94,
         "station_name": "朱太川実橋", "river_system": "朱太川水系 朱太川",
-        "weather_url": "",
+        "weather_url": "https://weathernews.jp/onebox/river/shubutogawa/?pid=0025700400387",
         "runoff_factor": 0.035, "decay_rate": 0.96, "drought_rate": 0.0005,
         "temp_base": 11.5, "temp_factor": 0.38, "max_temp": 22.0
     }
@@ -83,6 +76,12 @@ def fetch_weather_water_level(url, default_val):
         res = requests.get(url, headers=headers, timeout=5)
         res.raise_for_status()
         
+        match = re.search(r'現在(?:水位)?[^0-9]*([0-9]+\.[0-9]{2})\s*m', res.text)
+        if match:
+            val = float(match.group(1))
+            if 0.0 <= val <= 100.0:
+                return val, "ウェザーニュース (自動取得)"
+                
         matches = re.findall(r'([0-9]+\.[0-9]{2})\s*m', res.text)
         if matches:
             valid_values = [float(m) for m in matches if 0.0 <= float(m) <= 100.0]
@@ -346,7 +345,7 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
         "level_diff": level_diff
     }
 
-st.title("🐟 北海道 鮎コンディション判定 & 未来予測")
+st.title("北海道 鮎コンディション判定 & 未来予測")
 
 col_sel1, col_sel2 = st.columns(2)
 with col_sel1:
@@ -361,10 +360,10 @@ current_actual, fetch_source = fetch_weather_water_level(river_info["weather_url
 
 col_caption1, col_caption2 = st.columns([3, 1])
 with col_caption1:
-    st.caption(f"📍 観測所: {river_info['station_name']}（{river_info['river_system']}） ／ 基準水位線: {river_info['base_level']:.2f}m ／ 現在実測値: **{current_actual:.2f}m** ({fetch_source})")
+    st.caption(f"観測所: {river_info['station_name']}（{river_info['river_system']}） / 基準水位線: {river_info['base_level']:.2f}m / 現在実測値: {current_actual:.2f}m ({fetch_source})")
 with col_caption2:
     if river_info["weather_url"]:
-        st.markdown(f"[🌊 ウェザーニュースページ]({river_info['weather_url']})")
+        st.markdown(f"[ウェザーニュースページ]({river_info['weather_url']})")
 
 df_weather = fetch_weather_data(river_info["lat"], river_info["lon"])
 user_logs = load_logs()
@@ -373,29 +372,29 @@ res = analyze_condition(df_weather, river_info, user_logs, target_river, target_
 st.markdown("---")
 
 if target_date == today_date:
-    st.subheader("📅 本日のコンディション予測")
+    st.subheader("本日のコンディション予測")
 else:
-    st.subheader(f"📅 {target_date.strftime('%Y年%m月%d日')} のコンディション事前予測")
+    st.subheader(f"{target_date.strftime('%Y年%m月%d日')} のコンディション事前予測")
 
 stars = "★" * res["score"] + "☆" * (10 - res["score"])
-st.markdown(f"### 🎯 釣行日おすすめ度 : {stars} （**{res['score']}** / 10）")
+st.markdown(f"### 釣行日おすすめ度 : {stars} （{res['score']} / 10）")
 
 col_alert1, col_alert2 = st.columns(2)
 with col_alert1:
-    st.info(f"**増水・全飛びリスク**: {res['flood_risk']}")
+    st.info(f"増水・全飛びリスク: {res['flood_risk']}")
 with col_alert2:
     if "⚠️" in res["moss_alert"] or "🚫" in res["moss_alert"] or "🟡" in res["moss_alert"]:
-        st.warning(f"**コンディション**: {res['moss_alert']}")
+        st.warning(f"コンディション: {res['moss_alert']}")
     else:
-        st.success(f"**コンディション**: {res['moss_alert']}")
+        st.success(f"コンディション: {res['moss_alert']}")
 
 if res["level_diff"] >= 0.50:
-    st.error(f"🚨 **大増水（釣り困難）**: 基準水位より **+{res['level_diff']*100:.0f}cm** と大幅な増水が予想されます。垢が飛んでいる可能性が高く、立ち込みは非常に危険です。")
+    st.error(f"大増水（釣り困難）: 基準水位より +{res['level_diff']*100:.0f}cm と大幅な増水が予想されます。垢が飛んでいる可能性が高く、立ち込みは非常に危険です。")
 elif res["level_diff"] >= 0.30:
-    st.warning(f"⚠️ **高水注意**: 基準水位より **+{res['level_diff']*100:.0f}cm** 高めです（水量が多く釣りにくい状態の可能性があります）。")
+    st.warning(f"高水注意: 基準水位より +{res['level_diff']*100:.0f}cm 高めです（水量が多く釣りにくい状態の可能性があります）。")
 
 if res["max_wind"] >= 6.0:
-    st.error(f"💨 **強風注意**: 予想最大風速 {res['max_wind']:.1f} m/s （長尺竿の操作・保持にご注意ください）")
+    st.error(f"強風注意: 予想最大風速 {res['max_wind']:.1f} m/s （長尺竿の操作・保持にご注意ください）")
 
 col1, col2, col3, col4, col5, col6 = st.columns(6)
 col1.metric("水位状況", f"{res['water_level']:.2f} m", res["level_trend"])
@@ -405,11 +404,11 @@ col4.metric("推計水温", f"{res['water_temp_max']:.1f}℃", f"平均 {res['wa
 col5.metric("ハミ垢生育度", f"{res['moss_growth']} %")
 col6.metric("最大風速", f"{res['max_wind']:.1f} m/s")
 
-st.write(f"**濁り・澄み具合予測**: {res['clarity_recovery']}")
-st.caption(f"※ 垢育成シーズンモード: **{res['season_mode']}** ／ 大水（＋50cm目安）からの経過日数: **{res['days_since_flood']}日**")
+st.write(f"濁り・澄み具合予測: {res['clarity_recovery']}")
+st.caption(f"※ 垢育成シーズンモード: {res['season_mode']} / 大水（＋50cm目安）からの経過日数: {res['days_since_flood']}日")
 
 st.markdown("---")
-st.subheader(f"🌤️ {target_date.strftime('%m月%d日')} の1時間ごとのピンポイント天気予報")
+st.subheader(f"{target_date.strftime('%m月%d日')} の1時間ごとのピンポイント天気予報")
 
 if not res["target_df"].empty:
     df_hourly_view = res["target_df"].copy()
@@ -423,7 +422,7 @@ if not res["target_df"].empty:
     st.dataframe(table_df.T, use_container_width=True)
 
 st.markdown("---")
-st.subheader("📊 水位グラフ（基準水位線 ＆ 天気予報AI予測）")
+st.subheader("水位グラフ（基準水位線 & 天気予報AI予測）")
 
 graph_range = st.radio(
     "グラフの表示期間を選択してください",
@@ -444,10 +443,10 @@ if not res["df_hydro"].empty:
     chart_hydro = chart_hydro.set_index("時間")
     
     st.line_chart(chart_hydro[["シミュレーション水位(m)", "基準水位線(m)"]])
-    st.caption(f"※ シミュレーション水位：気象予報（雨量・気温）を基にしたAI予測値 ／ 基準水位線：{target_river}の基準線（{river_info['base_level']:.2f}m）")
+    st.caption(f"※ シミュレーション水位：気象予報（雨量・気温）を基にしたAI予測値 / 基準水位線：{target_river}の基準線（{river_info['base_level']:.2f}m）")
 
 st.markdown("---")
-st.subheader("⏰ 釣行日の水温推移 & ベスト時合予測")
+st.subheader("釣行日の水温推移 & ベスト時合予測")
 
 temp_data = res["hourly_water_temp"]
 hours = [f"{i:02d}:00" for i in range(24)]
@@ -473,20 +472,20 @@ over_hours = [i for i, t in enumerate(temp_data) if t > 24.0]
 
 if best_hours:
     b_start, b_end = min(best_hours), max(best_hours)
-    st.success(f"🔥 **ベスト時合 (20℃〜24℃)**: **{b_start:02d}:00 ～ {b_end:02d}:00**（追い・ハミ出しともに最高潮の黄金タイムです）")
+    st.success(f"ベスト時合 (20℃〜24℃): {b_start:02d}:00 ～ {b_end:02d}:00（追い・ハミ出しともに最高潮の黄金タイムです）")
 
 if upward_hours:
     u_start, u_end = min(upward_hours), max(upward_hours)
-    st.info(f"📈 **活性上向き (18℃〜19.9℃)**: **{u_start:02d}:00 ～ {u_end:02d}:00**（ハミ出しや追いが活発になり始める時間帯です）")
+    st.info(f"活性上向き (18℃〜19.9℃): {u_start:02d}:00 ～ {u_end:02d}:00（ハミ出しや追いが活発になり始める時間帯です）")
 elif not best_hours:
-    st.warning("💡 **時合注意**: 全体的に水温が低めまたは高めの推移です。水温変化のタイミングを狙ってください。")
+    st.warning("時合注意: 全体的に水温が低めまたは高めの推移です。水温変化のタイミングを狙ってください。")
 
 if over_hours:
     o_start, o_end = min(over_hours), max(over_hours)
-    st.warning(f"⚠️ **高水温注意 (24℃超)**: **{o_start:02d}:00 ～ {o_end:02d}:00**（高水温により鮎がヘバる可能性がある時間帯です）")
+    st.warning(f"高水温注意 (24℃超): {o_start:02d}:00 ～ {o_end:02d}:00（高水温により鮎がヘバる可能性がある時間帯です）")
 
 st.markdown("---")
-st.subheader("📝 実釣ログの記録（学習用）")
+st.subheader("実釣ログの記録（学習用）")
 
 with st.form("log_form"):
     col_log1, col_log2 = st.columns(2)
@@ -520,13 +519,13 @@ with st.form("log_form"):
         st.rerun()
 
 if user_logs:
-    with st.expander("📂 下記の実釣ログを確認・削除"):
+    with st.expander("下記の実釣ログを確認・削除"):
         for idx, log in enumerate(user_logs):
             c1, c2, c3, c4, c5 = st.columns([2, 3, 2, 3, 2])
-            c1.write(f"📅 {log.get('date')}")
-            c2.write(f"🌊 {log.get('river', '未設定')}")
-            c3.write(f"🐟 {log.get('catch')} 匹")
-            c4.write(f"🪨 {log.get('moss_condition')}")
+            c1.write(f"{log.get('date')}")
+            c2.write(f"{log.get('river', '未設定')}")
+            c3.write(f"{log.get('catch')} 匹")
+            c4.write(f"{log.get('moss_condition')}")
             if c5.button("削除", key=f"del_{idx}"):
                 delete_log(idx)
                 st.success("ログを削除しました。")
