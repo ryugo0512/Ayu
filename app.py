@@ -457,17 +457,17 @@ over_hours = [i for i, t in enumerate(temp_data) if t > 24.0]
 
 if best_hours:
     b_start, b_end = min(best_hours), max(best_hours)
-    st.success(🔥 **ベスト時合 (20℃〜24℃)**: **{b_start:02d}:00 ～ {b_end:02d}:00**（追い・ハミ出しともに最高潮の黄金タイムです）)
+    st.success(f"🔥 **ベスト時合 (20℃〜24℃)**: **{b_start:02d}:00 ～ {b_end:02d}:00**（追い・ハミ出しともに最高潮の黄金タイムです）")
 
 if upward_hours:
     u_start, u_end = min(upward_hours), max(upward_hours)
-    st.info(📈 **活性上向き (18℃〜19.9℃)**: **{u_start:02d}:00 ～ {u_end:02d}:00**（ハミ出しや追いが活発になり始める時間帯です）)
+    st.info(f"📈 **活性上向き (18℃〜19.9℃)**: **{u_start:02d}:00 ～ {u_end:02d}:00**（ハミ出しや追いが活発になり始める時間帯です）")
 elif not best_hours:
     st.warning("💡 **時合注意**: 全体的に水温が低めまたは高めの推移です。水温変化のタイミングを狙ってください。")
 
 if over_hours:
     o_start, o_end = min(over_hours), max(over_hours)
-    st.warning(⚠️ **高水温注意 (24℃超)**: **{o_start:02d}:00 ～ {o_end:02d}:00**（高水温により鮎がヘバる可能性がある時間帯です）)
+    st.warning(f"⚠️ **高水温注意 (24℃超)**: **{o_start:02d}:00 ～ {o_end:02d}:00**（高水温により鮎がヘバる可能性がある時間帯です）")
 
 # ---------------------------------------------------------
 # 10. 実釣ログ入力 & 削除管理機能
