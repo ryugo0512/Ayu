@@ -37,7 +37,7 @@ RIVERS = {
     "尻別川本流（蘭越）": {
         "lat": 42.8021, "lon": 140.5251, "base_level": 9.27, "default_actual": 9.27,
         "station_name": "蘭越", "river_system": "尻別川水系 尻別川",
-        "weather_url": "https://weathernews.jp/onebox/river/shiribetsugawa/?pid=0025700400131",
+        "weather_url": "https://weathernews.jp/onebox/river/shiribetsugawa/?pid=2078700400005",
         "runoff_factor": 0.025, "decay_rate": 0.96, "drought_rate": 0.0005,
         "temp_base": 11.0, "temp_factor": 0.35, "max_temp": 21.5
     },
@@ -76,34 +76,27 @@ def fetch_weather_water_level(url, default_val):
         res = requests.get(url, headers=headers, timeout=5)
         res.raise_for_status()
         
-        # タグ除去してテキスト化
         clean_text = re.sub(r'<[^>]+>', ' ', res.text)
         clean_text = ' '.join(clean_text.split())
 
-        # パターン1: 「現在水位 X.XX m」または「現在水位 X.XXm」
         match = re.search(r'現在水位\s*(\d+\.\d{2})\s*m', clean_text)
         if match:
             return float(match.group(1)), "ウェザーニュース (自動取得)"
 
-        # パターン2: 「XX:XX時点 X.XX m」
         match = re.search(r'\d{1,2}:\d{2}\s*時点\s*(\d+\.\d{2})\s*m', clean_text)
         if match:
             return float(match.group(1)), "ウェザーニュース (自動取得)"
 
-        # パターン3: 「時点 X.XX m」
         match = re.search(r'時点\s*(\d+\.\d{2})\s*m', clean_text)
         if match:
             return float(match.group(1)), "ウェザーニュース (自動取得)"
 
-        # パターン4: 単純な「X.XX m」表記（基準値固定の誤抽出を避けるため厳格に処理）
         matches = re.findall(r'(\d+\.\d{2})\s*m', clean_text)
         if matches:
             for m_str in matches:
                 val = float(m_str)
-                # 基準値ぴったり（設定値の誤検出）を除外した上で実測値を採用
                 if abs(val - default_val) > 0.001 and abs(val - default_val) <= 3.0:
                     return val, "ウェザーニュース (自動取得)"
-            # 変化がない場合は最初の数値を返す
             return float(matches[0]), "ウェザーニュース (自動取得)"
 
         return default_val, "デフォルト値 (数値未検出または異常値)"
