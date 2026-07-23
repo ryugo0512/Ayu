@@ -5,7 +5,7 @@ import datetime
 import json
 import os
 import requests
-from bs4 import BeautifulSoup
+import re
 import altair as alt
 
 # ---------------------------------------------------------
@@ -37,25 +37,25 @@ def delete_log(index):
         save_logs(logs)
 
 # ---------------------------------------------------------
-# 2. 河川・観測所データ設定（Yahoo!天気URL・地点コード紐付け）
+# 2. 河川・観測所データ設定（Yahoo!天気個別URL完全紐付け）
 # ---------------------------------------------------------
 RIVERS = {
     "尻別川本流（蘭越）": {
-        "lat": 42.8021, "lon": 140.5251, "base_level": 2.10, "default_actual": 2.10,
+        "lat": 42.8021, "lon": 140.5251, "base_level": 9.27, "default_actual": 9.27,
         "station_name": "蘭越", "river_system": "尻別川水系 尻別川",
-        "yahoo_url": "https://typhoon.yahoo.co.jp/weather/river/",
+        "yahoo_url": "https://typhoon.yahoo.co.jp/weather/river/8101040001/",
         "runoff_factor": 0.025, "decay_rate": 0.96, "drought_rate": 0.0005,
         "temp_base": 11.0, "temp_factor": 0.35, "max_temp": 21.5
     },
     "昆布川（昆布）": {
-        "lat": 42.7958, "lon": 140.5986, "base_level": 1.50, "default_actual": 1.50,
+        "lat": 42.7958, "lon": 140.5986, "base_level": 43.58, "default_actual": 43.58,
         "station_name": "昆布川橋", "river_system": "尻別川水系 昆布川",
-        "yahoo_url": "https://typhoon.yahoo.co.jp/weather/river/",
+        "yahoo_url": "https://typhoon.yahoo.co.jp/weather/river/8101040013/",
         "runoff_factor": 0.030, "decay_rate": 0.95, "drought_rate": 0.0005,
         "temp_base": 10.5, "temp_factor": 0.38, "max_temp": 21.0
     },
     "天ノ川（上ノ国）": {
-        "lat": 41.7997, "lon": 140.1163, "base_level": 1.77, "default_actual": 1.76,
+        "lat": 41.7997, "lon": 140.1163, "base_level": 1.60, "default_actual": 1.60,
         "station_name": "古守大橋", "river_system": "天ノ川水系 天ノ川",
         "yahoo_url": "https://typhoon.yahoo.co.jp/weather/river/0101430001/",
         "runoff_factor": 0.030, "decay_rate": 0.97, "drought_rate": 0.0005,
@@ -64,25 +64,25 @@ RIVERS = {
     "上ノ沢川（天ノ川水系）": {
         "lat": 41.7554, "lon": 140.2321, "base_level": 1.74, "default_actual": 1.74,
         "station_name": "上ノ沢橋", "river_system": "天ノ川水系 上ノ沢川",
-        "yahoo_url": "https://typhoon.yahoo.co.jp/weather/river/",
+        "yahoo_url": "https://typhoon.yahoo.co.jp/weather/river/0101430001/",
         "runoff_factor": 0.028, "decay_rate": 0.96, "drought_rate": 0.0005,
         "temp_base": 11.8, "temp_factor": 0.39, "max_temp": 22.0
     },
     "朱太川（黒松内）": {
-        "lat": 42.6683, "lon": 140.3061, "base_level": 1.40, "default_actual": 1.40,
+        "lat": 42.6683, "lon": 140.3061, "base_level": 22.94, "default_actual": 22.94,
         "station_name": "朱太川実橋", "river_system": "朱太川水系 朱太川",
-        "yahoo_url": "https://typhoon.yahoo.co.jp/weather/river/",
+        "yahoo_url": "https://typhoon.yahoo.co.jp/weather/river/0101540001/",
         "runoff_factor": 0.035, "decay_rate": 0.96, "drought_rate": 0.0005,
         "temp_base": 11.5, "temp_factor": 0.38, "max_temp": 22.0
     }
 }
 
 # ---------------------------------------------------------
-# 3. Yahoo!天気スクレイピングモジュール（実測値自動取得）
+# 3. Yahoo!天気水位自動取得モジュール（標準ライブラリ使用）
 # ---------------------------------------------------------
 @st.cache_data(ttl=600)
 def fetch_yahoo_water_level(url, default_val):
-    if not url or "0101430001" not in url:  # 現状有効な個別URLが設定されている場合のみスクレイピング試行
+    if not url:
         return default_val, "デフォルト値"
     
     headers = {
@@ -91,23 +91,16 @@ def fetch_yahoo_water_level(url, default_val):
     try:
         res = requests.get(url, headers=headers, timeout=5)
         res.raise_for_status()
-        soup = BeautifulSoup(res.text, "html.parser")
         
-        # Yahoo!天気の水位表示要素を探索（構造変更に備え複数候補をチェック）
-        # 通常、現在の水位は特定のクラスや数値テキストとして格納されています
-        val_elem = soup.find("td", class_="rnk") or soup.find(class_="waterLevel") or soup.find(string=lambda t: t and "m" in t)
-        
-        # 簡易的にテキスト抽出または正規表現等で数値を探す
-        for text in soup.stripped_strings:
-            try:
-                # 浮動小数点の水位らしい数値（例: 1.76）を検出
-                val = float(text)
-                if 0.5 <= val <= 10.0:  # 河川水位として現実的な範囲
-                    return val, "Yahoo!天気 (実測自動取得)"
-            except ValueError:
-                continue
-                
-        return default_val, "デフォルト値 (取得失敗・フォールバック)"
+        # Yahoo!天気のページから現在水位の数値を正規表現で抽出
+        matches = re.findall(r'([0-9]+\.[0-9]{2})\s*m', res.text)
+        if matches:
+            for m in matches:
+                val = float(m)
+                if 0.0 <= val <= 100.0:  # 河川水位として妥当な範囲
+                    return val, "Yahoo!天気 (自動取得)"
+                    
+        return default_val, "デフォルト値 (数値未検出)"
     except Exception:
         return default_val, "デフォルト値 (通信エラー)"
 
@@ -384,7 +377,7 @@ with col_sel2:
 
 river_info = RIVERS[target_river]
 
-# Yahoo!天気から自動取得＆リンク表示
+# Yahoo!天気から自動取得
 current_actual, fetch_source = fetch_yahoo_water_level(river_info["yahoo_url"], river_info["default_actual"])
 
 col_caption1, col_caption2 = st.columns([3, 1])
