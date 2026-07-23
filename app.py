@@ -57,11 +57,11 @@ RIVERS = {
 }
 
 # ---------------------------------------------------------
-# 3. 外部API取得モジュール
+# 3. 外部API取得モジュール & 天気コード変換
 # ---------------------------------------------------------
 @st.cache_data(ttl=3600)
 def fetch_weather_and_hydro(lat, lon):
-    url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=temperature_2m,precipitation,sunshine_duration,shortwave_radiation&past_days=14&forecast_days=7&timezone=Asia%2FTokyo"
+    url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=temperature_2m,precipitation,weathercode,sunshine_duration,shortwave_radiation&past_days=14&forecast_days=7&timezone=Asia%2FTokyo"
     try:
         res = requests.get(url, timeout=10)
         data = res.json()
@@ -82,6 +82,22 @@ def fetch_real_water_level(stg_id):
     except Exception:
         pass
     return None
+
+def get_weather_desc(code):
+    if code in [0]:
+        return "☀️ 快晴"
+    elif code in [1, 2]:
+        return "🌤️ 晴れ時々曇り"
+    elif code in [3]:
+        return "☁️ 曇り"
+    elif code in [45, 48]:
+        return "🌫️ 霧"
+    elif code in [51, 53, 55, 61, 63, 65, 80, 81, 82]:
+        return "🌧️ 雨"
+    elif code in [95, 96, 99]:
+        return "⛈️ 雷雨"
+    else:
+        return "☁️ 曇り"
 
 # ---------------------------------------------------------
 # 4. 水位推移シミュレーション
@@ -137,7 +153,12 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
             "season_mode": "盛期",
             "score": 5,
             "hourly_water_temp": [16 + i*0.5 for i in range(24)],
-            "df_hydro": pd.DataFrame()
+            "df_hydro": pd.DataFrame(),
+            "weather_desc": "データ取得不可",
+            "temp_max": 20.0,
+            "temp_min": 15.0,
+            "water_temp_max": 18.0,
+            "water_temp_avg": 16.5
         }
 
     df_weather = simulate_water_levels(
@@ -157,6 +178,7 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
         feedbacks = [l.get("moss_feedback", 0) for l in river_logs]
         bias_growth = np.mean(feedbacks) * 0.1
 
+    # 水温推計（外気温の75% + 基礎水温3度）
     df_weather["estimated_water_temp"] = df_weather["temperature_2m"] * 0.75 + 3.0
 
     df_past = df_weather[df_weather["time"] <= target_datetime].copy()
@@ -181,6 +203,7 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
         clarity_recovery = "清澄（良好）"
         clarity_score = 3
 
+    # 垢育成シーズンモード判定
     m, d = target_date.month, target_date.day
     if m == 7 and d <= 15:
         season_mode = "初期（低水温・緩速成長）"
@@ -197,13 +220,25 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
 
     moss_growth = min(100, int((days_since_flood * growth_rate) * (1.0 + bias_growth)))
 
+    # 対象日の気象・水温計算
     target_df = df_weather[df_weather["time"].dt.date == target_date]
     if not target_df.empty and len(target_df) >= 24:
         hourly_water_temp = target_df["estimated_water_temp"].tolist()[:24]
         current_sim_level = target_df["simulated_level"].mean()
+        
+        # 気象情報抽出
+        most_code = target_df["weathercode"].mode()[0] if not target_df["weathercode"].empty else 0
+        weather_desc = get_weather_desc(most_code)
+        temp_max = target_df["temperature_2m"].max()
+        temp_min = target_df["temperature_2m"].min()
+        water_temp_max = max(hourly_water_temp)
+        water_temp_avg = float(np.mean(hourly_water_temp))
     else:
         hourly_water_temp = [15.0 + (i if i <= 14 else 28 - i) * 0.4 for i in range(24)]
         current_sim_level = real_level if real_level is not None else river_info["base_level"]
+        weather_desc = "☀️ 晴れ"
+        temp_max, temp_min = 22.0, 16.0
+        water_temp_max, water_temp_avg = 18.5, 16.8
 
     level_diff = current_sim_level - river_info["base_level"]
     if level_diff < -0.08:
@@ -264,7 +299,12 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
         "season_mode": season_mode,
         "score": score,
         "hourly_water_temp": hourly_water_temp,
-        "df_hydro": df_hydro
+        "df_hydro": df_hydro,
+        "weather_desc": weather_desc,
+        "temp_max": temp_max,
+        "temp_min": temp_min,
+        "water_temp_max": water_temp_max,
+        "water_temp_avg": water_temp_avg
     }
 
 # ---------------------------------------------------------
@@ -295,6 +335,7 @@ else:
 stars = "★" * res["score"] + "☆" * (10 - res["score"])
 st.markdown(f"### 🎯 釣行日おすすめ度 : {stars} （**{res['score']}** / 10）")
 
+# 警報・アラート表示
 col_alert1, col_alert2 = st.columns(2)
 with col_alert1:
     st.info(f"**全飛びリスク判定**: {res['flood_risk']}")
@@ -304,14 +345,17 @@ with col_alert2:
     else:
         st.success(f"**コンディション**: {res['moss_alert']}")
 
-col1, col2, col3, col4 = st.columns(4)
-label_water = "水文テレメータ実測" if res["level_is_real"] else "推測水位"
+# 主要指標（水位・天気・気温・水温・ハミ垢）
+col1, col2, col3, col4, col5 = st.columns(5)
+label_water = "実測" if res["level_is_real"] else "推測"
 col1.metric(f"水位 ({label_water})", f"{res['water_level']:.2f} m", res["level_trend"])
-col2.metric("全飛びからの経過", f"{res['days_since_flood']} 日")
-col3.metric("ハミ垢生育度", f"{res['moss_growth']} %")
-col4.metric("シーズンモード", res["season_mode"])
+col2.metric("天気", res["weather_desc"])
+col3.metric("予想気温", f"{res['temp_max']:.1f}℃", f"最低 {res['temp_min']:.1f}℃")
+col4.metric("予想水温", f"{res['water_temp_max']:.1f}℃", f"平均 {res['water_temp_avg']:.1f}℃")
+col5.metric("ハミ垢生育度", f"{res['moss_growth']} %")
 
 st.write(f"**濁り・澄み具合予測**: {res['clarity_recovery']}")
+st.caption(f"※ 垢育成シーズンモード: **{res['season_mode']}** ／ 全飛びからの経過日数: **{res['days_since_flood']}日**")
 
 # ---------------------------------------------------------
 # 7. 水位グラフ（過去：実測、未来：AI天気予報予測で色分け）
