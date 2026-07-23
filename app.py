@@ -36,7 +36,7 @@ def delete_log(index):
         save_logs(logs)
 
 # ---------------------------------------------------------
-# 2. 河川・観測所データ設定（高精度パラメータ追加）
+# 2. 河川・観測所データ設定（上ノ沢川追加）
 # ---------------------------------------------------------
 RIVERS = {
     "尻別川本流（蘭越）": {
@@ -53,6 +53,11 @@ RIVERS = {
         "lat": 41.7997, "lon": 140.1163, "base_level": 0.90,
         "stg_id": "3010112811010", "runoff_factor": 0.030, "decay_rate": 0.97, "drought_rate": 0.0005,
         "temp_base": 12.0, "temp_factor": 0.40, "max_temp": 22.5
+    },
+    "上ノ沢川（天ノ川水系）": {
+        "lat": 41.7554, "lon": 140.2321, "base_level": -3.00,
+        "stg_id": "100000492", "runoff_factor": 0.028, "decay_rate": 0.96, "drought_rate": 0.0005,
+        "temp_base": 11.8, "temp_factor": 0.39, "max_temp": 22.0
     },
     "朱太川（黒松内）": {
         "lat": 42.6683, "lon": 140.3061, "base_level": 0.70,
@@ -78,6 +83,7 @@ def fetch_weather_and_hydro(lat, lon):
 
 @st.cache_data(ttl=900)
 def fetch_real_water_level(stg_id):
+    # 危機管理型水位計などの場合、通常の水位APIとパスが異なることがあるため例外処理を堅牢化
     url = f"https://www.river.go.jp/kawabou/api/v1/waterlevel/latest?stationCode={stg_id}"
     try:
         res = requests.get(url, timeout=5)
@@ -171,7 +177,8 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
             "temp_min": 15.0,
             "water_temp_max": 18.0,
             "water_temp_avg": 16.5,
-            "max_wind": 2.0
+            "max_wind": 2.0,
+            "level_diff": 0.0
         }
 
     df_weather = simulate_water_levels(
@@ -301,7 +308,6 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
 
     score = max(1, min(raw_score, max_cap))
 
-    # 大幅な増水（30cm以上）の場合はおすすめ度を強制的に1に下げる
     if level_diff >= 0.30:
         score = 1
     elif level_diff >= 0.15:
@@ -370,7 +376,6 @@ with col_alert2:
     else:
         st.success(f"**コンディション**: {res['moss_alert']}")
 
-# 大幅な増水（30cm以上）の場合の警告表示
 if res["level_diff"] >= 0.30:
     st.error(f"🚨 **危険（大幅な増水）**: 基準水位より **+{res['level_diff']*100:.0f}cm** の増水および強い濁りが予想されます。釣行は極めて危険なため見合わせてください。")
 elif res["level_diff"] >= 0.15:
@@ -523,10 +528,4 @@ if user_logs:
         for idx, log in enumerate(user_logs):
             c1, c2, c3, c4, c5 = st.columns([2, 3, 2, 3, 2])
             c1.write(f"📅 {log.get('date')}")
-            c2.write(f"🌊 {log.get('river', '未設定')}")
-            c3.write(f"🐟 {log.get('catch')} 匹")
-            c4.write(f"🪨 {log.get('moss_condition')}")
-            if c5.button("削除", key=f"del_{idx}"):
-                delete_log(idx)
-                st.success("ログを削除しました。")
-                st.rerun()
+            c2.write(f"🌊 {lo
