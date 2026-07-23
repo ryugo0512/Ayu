@@ -37,7 +37,7 @@ RIVERS = {
     "尻別川本流（蘭越）": {
         "lat": 42.8021, "lon": 140.5251, "base_level": 9.27, "default_actual": 9.27,
         "station_name": "蘭越", "river_system": "尻別川水系 尻別川",
-        "weather_url": "https://weathernews.jp/onebox/river/?pid=0025700400132",
+        "weather_url": "https://weathernews.jp/onebox/river/shiribetsugawa/?pid=0025700400131",
         "runoff_factor": 0.025, "decay_rate": 0.96, "drought_rate": 0.0005,
         "temp_base": 11.0, "temp_factor": 0.35, "max_temp": 21.5
     },
@@ -77,27 +77,24 @@ def fetch_weather_water_level(url, default_val):
         res.raise_for_status()
         text = res.text
         
-        # 1. 「時点」の直後にある現在水位（例: 17:20時点 1.74m）を抽出
         match = re.search(r'時点[^\d]*?(\d+\.\d{2})\s*m', text)
         if match:
             val = float(match.group(1))
             if 0.0 <= val <= 100.0:
                 return val, "ウェザーニュース (自動取得)"
                 
-        # 2. 「現在水位」「水位情報」周辺の文字から抽出
         match = re.search(r'(?:現在水位|水位情報|現在)[^\d]*?(\d+\.\d{2})\s*m', text)
         if match:
             val = float(match.group(1))
             if 0.0 <= val <= 100.0:
                 return val, "ウェザーニュース (自動取得)"
 
-        # 3. ページ内の数値から最も基準値に近い値を抽出
         matches = re.findall(r'(\d+\.\d{2})\s*m', text)
         if matches:
             valid_values = [float(m) for m in matches if 0.0 <= float(m) <= 100.0]
             if valid_values:
                 closest_val = min(valid_values, key=lambda x: abs(x - default_val))
-                if abs(closest_val - default_val) <= 1.5:
+                if abs(closest_val - default_val) <= 2.5:
                     return closest_val, "ウェザーニュース (自動取得)"
                     
         return default_val, "デフォルト値 (数値未検出または異常値)"
@@ -265,7 +262,11 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
     target_df = df_weather[df_weather["time"].dt.date == target_date].copy()
     if not target_df.empty and len(target_df) >= 24:
         hourly_water_temp = target_df["estimated_water_temp"].tolist()[:24]
-        current_sim_level = target_df["simulated_level"].mean()
+        
+        if target_date == datetime.date.today():
+            display_water_level = current_actual
+        else:
+            display_water_level = target_df["simulated_level"].mean()
         
         most_code = target_df["weathercode"].mode()[0] if not target_df["weathercode"].empty else 0
         weather_desc = get_weather_desc(most_code)
@@ -276,13 +277,13 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
         max_wind = target_df["windspeed_10m"].max() if "windspeed_10m" in target_df.columns else 0.0
     else:
         hourly_water_temp = [14.0 + (i if i <= 14 else 28 - i) * 0.3 for i in range(24)]
-        current_sim_level = current_actual
+        display_water_level = current_actual
         weather_desc = "☀️ 晴れ"
         temp_max, temp_min = 22.0, 16.0
         water_temp_max, water_temp_avg = 17.5, 15.8
         max_wind = 2.0
 
-    level_diff = current_sim_level - effective_base
+    level_diff = display_water_level - effective_base
     
     if level_diff < 0.0:
         level_trend = f"📉 渇水傾向 ({level_diff*100:+.0f}cm)"
@@ -334,7 +335,7 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
     df_hydro["base_level"] = effective_base
 
     return {
-        "water_level": current_sim_level,
+        "water_level": display_water_level,
         "level_trend": level_trend,
         "days_since_flood": days_since_flood,
         "moss_growth": moss_growth,
