@@ -29,10 +29,10 @@ def save_log(log_entry):
 # 2. 河川・観測所データ設定
 # ---------------------------------------------------------
 RIVERS = {
-    "尻別川本流（蘭越）": {"lat": 42.8021, "lon": 140.5251, "base_level": 1.20, "runoff_factor": 0.015, "decay_rate": 0.85},
-    "昆布川（昆布）": {"lat": 42.7958, "lon": 140.5986, "base_level": 0.80, "runoff_factor": 0.020, "decay_rate": 0.80},
-    "天ノ川（上ノ国）": {"lat": 41.7997, "lon": 140.1163, "base_level": 0.90, "runoff_factor": 0.018, "decay_rate": 0.82},
-    "朱太川（黒松内）": {"lat": 42.6683, "lon": 140.3061, "base_level": 0.70, "runoff_factor": 0.022, "decay_rate": 0.78}
+    "尻別川本流（蘭越）": {"lat": 42.8021, "lon": 140.5251, "base_level": 1.20, "runoff_factor": 0.015, "decay_rate": 0.85, "drought_rate": 0.003},
+    "昆布川（昆布）": {"lat": 42.7958, "lon": 140.5986, "base_level": 0.80, "runoff_factor": 0.020, "decay_rate": 0.80, "drought_rate": 0.004},
+    "天ノ川（上ノ国）": {"lat": 41.7997, "lon": 140.1163, "base_level": 0.90, "runoff_factor": 0.018, "decay_rate": 0.82, "drought_rate": 0.004},
+    "朱太川（黒松内）": {"lat": 42.6683, "lon": 140.3061, "base_level": 0.70, "runoff_factor": 0.022, "decay_rate": 0.78, "drought_rate": 0.005}
 }
 
 # ---------------------------------------------------------
@@ -51,15 +51,31 @@ def fetch_weather_and_hydro(lat, lon):
         return None
 
 # ---------------------------------------------------------
-# 4. 水位推移シミュレーション
+# 4. 水位推移シミュレーション（増水・渇水両対応）
 # ---------------------------------------------------------
-def simulate_water_levels(df_weather, base_level, runoff_factor, decay_rate):
+def simulate_water_levels(df_weather, base_level, runoff_factor, decay_rate, drought_rate):
     levels = []
     current_runoff = 0.0
+    dry_hours = 0
+    
     for idx, row in df_weather.iterrows():
         rain = row["precipitation"]
-        current_runoff = current_runoff * decay_rate + (rain * runoff_factor)
-        levels.append(base_level + current_runoff)
+        temp = row["temperature_2m"]
+        
+        if rain > 0.5:
+            dry_hours = 0
+            current_runoff = current_runoff * decay_rate + (rain * runoff_factor)
+            drought_offset = 0.0
+        else:
+            dry_hours += 1
+            current_runoff = current_runoff * decay_rate
+            # 晴天・高温時の減水（渇水）モデル：無降雨時間と気温に応じて基準水位以下へ減少
+            temp_penalty = max(1.0, temp / 20.0)
+            drought_offset = min(0.30, dry_hours * drought_rate * temp_penalty)
+            
+        calculated_level = base_level + current_runoff - drought_offset
+        levels.append(calculated_level)
+        
     df_weather["simulated_level"] = levels
     return df_weather
 
@@ -82,11 +98,13 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
             "df_hydro": pd.DataFrame()
         }
 
+    # 増水・渇水対応シミュレーション実行
     df_weather = simulate_water_levels(
         df_weather, 
         river_info["base_level"], 
         river_info["runoff_factor"], 
-        river_info["decay_rate"]
+        river_info["decay_rate"],
+        river_info["drought_rate"]
     )
 
     target_datetime = datetime.datetime.combine(target_date, datetime.time(12, 0))
@@ -101,7 +119,7 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
     # 推定水温
     df_weather["estimated_water_temp"] = df_weather["temperature_2m"] * 0.75 + 3.0
 
-    # 全飛び判定（12時間35mm以上、または1時間15mm以上）
+    # 全飛び判定
     df_past = df_weather[df_weather["time"] <= target_datetime].copy()
     df_past["rain_12h"] = df_past["precipitation"].rolling(12, min_periods=1).sum()
     
@@ -125,7 +143,7 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
         clarity_recovery = "清澄（良好）"
         clarity_score = 3
 
-    # シーズンモード判定（成長スピードを実効値に合わせて再調整）
+    # シーズンモード判定
     m, d = target_date.month, target_date.day
     if m == 7 and d <= 15:
         season_mode = "初期（低水温・緩速成長）"
@@ -143,13 +161,31 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
     # ハミ垢生育度
     moss_growth = min(100, int((days_since_flood * growth_rate) * (1.0 + bias_growth)))
 
+    # 対象日の水温・水位
+    target_df = df_weather[df_weather["time"].dt.date == target_date]
+    if not target_df.empty and len(target_df) >= 24:
+        hourly_water_temp = target_df["estimated_water_temp"].tolist()[:24]
+        current_sim_level = target_df["simulated_level"].mean()
+    else:
+        hourly_water_temp = [15.0 + (i if i <= 14 else 28 - i) * 0.4 for i in range(24)]
+        current_sim_level = river_info["base_level"]
+
+    # 水位トレンド判定（渇水判定を含む）
+    level_diff = current_sim_level - river_info["base_level"]
+    if level_diff < -0.08:
+        level_trend = "📉 渇水傾向（減水）"
+    elif level_diff > 0.10:
+        level_trend = "📈 増水傾向"
+    else:
+        level_trend = "平水（安定）"
+
     # コンディション判定
     if days_since_flood <= 1 or moss_growth < 20:
         moss_alert = "🚫 全飛び直後（垢ナシ・石白っぽい）"
     elif days_since_flood <= 4 or moss_growth < 60:
         moss_alert = "🟡 垢付き始め（まだ薄く喰い浅い）"
-    elif days_since_flood > 12 and target_24h_rain < 5.0:
-        moss_alert = "⚠️ 垢腐り・泥垢注意（高水温・長期間渇水）"
+    elif level_diff < -0.12 and days_since_flood > 10:
+        moss_alert = "⚠️ 垢腐り・泥垢注意（高水温・渇水進行）"
     else:
         moss_alert = "✅ 新垢形成完了（良好）"
 
@@ -163,31 +199,20 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
     else:
         flood_risk = "🟢 安定：増水リスク低"
 
-    # 対象日の水温
-    target_df = df_weather[df_weather["time"].dt.date == target_date]
-    if not target_df.empty and len(target_df) >= 24:
-        hourly_water_temp = target_df["estimated_water_temp"].tolist()[:24]
-        current_sim_level = target_df["simulated_level"].mean()
-    else:
-        hourly_water_temp = [15.0 + (i if i <= 14 else 28 - i) * 0.4 for i in range(24)]
-        current_sim_level = river_info["base_level"]
-
-    # 10段階スコア計算（全飛び日数による厳密な上限設定）
+    # 10段階スコア計算
     temp_peak_hours = len([t for t in hourly_water_temp if t >= 17.0])
     temp_pts = 3 if temp_peak_hours >= 4 else (2 if temp_peak_hours >= 2 else 1)
     
-    # 基本算定
     raw_score = int((moss_growth / 100) * 4) + clarity_score + temp_pts
 
-    # 経過日数による強度のスコア上限（キャップ）処理
     if days_since_flood <= 2:
         max_cap = 3
     elif days_since_flood <= 4:
-        max_cap = 5  # 4日目は最大5点まで
+        max_cap = 5
     elif days_since_flood <= 6:
-        max_cap = 7  # 6日目までは最大7点まで
+        max_cap = 7
     else:
-        max_cap = 10 # 7日以上経過で10点解禁
+        max_cap = 10
 
     score = max(1, min(raw_score, max_cap))
 
@@ -199,7 +224,7 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
 
     return {
         "water_level": current_sim_level,
-        "level_trend": "減水傾向（引き水）" if target_24h_rain < 2.0 else "平水〜微増",
+        "level_trend": level_trend,
         "days_since_flood": days_since_flood,
         "moss_growth": moss_growth,
         "moss_alert": moss_alert,
