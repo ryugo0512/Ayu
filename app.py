@@ -206,7 +206,6 @@ def simulate_water_levels(df_weather, base_level, current_actual, river_decay_ra
 
     simulated_levels = np.zeros(len(df_weather))
 
-    # 過去データ：蓄積された実効履歴があればそれを使い、なければ基準水位または現在実測値
     for i in range(len(df_weather)):
         t_str = df_weather.loc[i, "time"].strftime("%Y-%m-%d %H:00")
         t = df_weather.loc[i, "time"]
@@ -218,7 +217,6 @@ def simulate_water_levels(df_weather, base_level, current_actual, river_decay_ra
 
     simulated_levels[now_idx] = current_actual
 
-    # 未来方向のみ降水予報に基づいてシミュレーション予測
     curr_lvl = current_actual
     for i in range(now_idx + 1, len(df_weather)):
         rain_imp = runoffs[i]
@@ -242,7 +240,7 @@ def analyze_condition(df_weather, is_weather_live, river_info, user_logs, target
     target_datetime = datetime.datetime.combine(target_date, datetime.time(12, 0))
 
     bias_growth = 0.0
-    river_logs = [l for l in user_logs if l.get("river"] == target_river]
+    river_logs = [l for l in user_logs if l.get("river") == target_river]
     if len(river_logs) > 0:
         feedbacks = [l.get("moss_feedback", 0) for l in river_logs]
         bias_growth = np.mean(feedbacks) * 0.1
@@ -427,7 +425,6 @@ river_info = RIVERS[target_river]
 
 current_actual, fetch_source = fetch_weather_water_level(river_info["weather_url"], river_info["default_actual"])
 
-# 現在の実測値を履歴に蓄積保存
 now_hour_str = pd.Timestamp.now().strftime("%Y-%m-%d %H:00")
 save_water_history(target_river, now_hour_str, current_actual)
 
