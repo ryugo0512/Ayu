@@ -132,7 +132,7 @@ def get_weather_desc(code):
         return "☁️ 曇り"
 
 def simulate_water_levels(df_weather, base_level, current_actual, runoff_factor, decay_rate, drought_rate):
-    levels = []
+    deltas = []
     current_runoff = 0.0
     effective_rain = 0.0
     dry_hours = 0
@@ -141,32 +141,33 @@ def simulate_water_levels(df_weather, base_level, current_actual, runoff_factor,
 
     for idx, row in df_weather.iterrows():
         rain = row["precipitation"]
-        temp = row["temperature_2m"]
         
         effective_rain = effective_rain * eff_decay + rain
         
         if rain > 0.2:
             dry_hours = 0
-            soil_contribution = effective_rain * 0.001
+            soil_contribution = effective_rain * 0.0008
             current_runoff = current_runoff * decay_rate + (rain * runoff_factor) + soil_contribution
             drought_offset = 0.0
         else:
             dry_hours += 1
             current_runoff = current_runoff * decay_rate
-            # 渇水による低下幅を最大でも 0.15m (15cm) までに強く制限
-            drought_offset = min(0.15, dry_hours * drought_rate)
+            drought_offset = min(0.05, dry_hours * drought_rate)
             
-        calculated_level = base_level + current_runoff - drought_offset
-        levels.append(calculated_level)
+        delta_val = current_runoff - drought_offset
+        deltas.append(delta_val)
         
-    df_weather["simulated_level"] = levels
+    df_weather["simulated_delta"] = deltas
     
     now = pd.Timestamp.now()
     if not df_weather[df_weather["time"] <= now].empty:
         idx_now = (df_weather["time"] - now).abs().argsort()[:1].values[0]
-        sim_at_now = df_weather.loc[idx_now, "simulated_level"]
-        shift_diff = current_actual - sim_at_now
-        df_weather["simulated_level"] = df_weather["simulated_level"] + shift_diff
+        delta_at_now = df_weather.loc[idx_now, "simulated_delta"]
+    else:
+        delta_at_now = 0.0
+
+    # 現在実測値を基準にして、未来の増減（デルタ）だけを反映する
+    df_weather["simulated_level"] = current_actual + (df_weather["simulated_delta"] - delta_at_now)
     
     return df_weather
 
@@ -287,7 +288,6 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
 
     level_diff = display_water_level - effective_base
     
-    # 変更：通常水位より -10cm (-0.10m) 未満で渇水傾向とする
     if level_diff < -0.10:
         level_trend = f"📉 渇水傾向 ({level_diff*100:+.0f}cm)"
     elif level_diff <= 0.15:
@@ -329,10 +329,18 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
 
     score = max(1, min(raw_score, max_cap))
 
+    # 水位異常による厳格なスコア制限（渇水・高水ペナルティ）
+    if level_diff < -0.20:
+        score = min(score, 3)  # 大幅渇水時は星3以下
+    elif level_diff < -0.10:
+        score = min(score, 5)  # 渇水傾向時は星5以下
+    
     if level_diff >= 0.50:
         score = 1
     elif level_diff >= 0.30:
         score = min(score, 3)
+    elif level_diff >= 0.15:
+        score = min(score, 7)
 
     df_hydro = df_weather.copy()
     df_hydro["base_level"] = effective_base
