@@ -75,28 +75,41 @@ def fetch_weather_water_level(url, default_val):
     try:
         res = requests.get(url, headers=headers, timeout=5)
         res.raise_for_status()
-        text = res.text
         
-        match = re.search(r'時点[^\d]*?(\d+\.\d{2})\s*m', text)
-        if match:
-            val = float(match.group(1))
-            if 0.0 <= val <= 100.0:
-                return val, "ウェザーニュース (自動取得)"
-                
-        match = re.search(r'(?:現在水位|水位情報|現在)[^\d]*?(\d+\.\d{2})\s*m', text)
+        # HTMLタグを除去してプレーンテキスト化
+        clean_text = re.sub(r'<[^>]+>', ' ', res.text)
+        clean_text = ' '.join(clean_text.split())
+
+        # 1. 「現在水位 ◯.◯ m」パターン
+        match = re.search(r'現在水位\s*(\d+\.\d{2})\s*m?', clean_text)
         if match:
             val = float(match.group(1))
             if 0.0 <= val <= 100.0:
                 return val, "ウェザーニュース (自動取得)"
 
-        matches = re.findall(r'(\d+\.\d{2})\s*m', text)
+        # 2. 「時刻時点 ◯.◯m」パターン
+        match = re.search(r'\d{1,2}:\d{2}\s*時点\s*(\d+\.\d{2})\s*m?', clean_text)
+        if match:
+            val = float(match.group(1))
+            if 0.0 <= val <= 100.0:
+                return val, "ウェザーニュース (自動取得)"
+
+        # 3. 「時点 ◯.◯m」または「水位 ◯.◯m」
+        match = re.search(r'(?:時点|水位)[^\d]*?(\d+\.\d{2})\s*m', clean_text)
+        if match:
+            val = float(match.group(1))
+            if 0.0 <= val <= 100.0:
+                return val, "ウェザーニュース (自動取得)"
+
+        # 4. 基準値に最も近い数値を探す（許容範囲5.0m以内）
+        matches = re.findall(r'(\d+\.\d{2})', clean_text)
         if matches:
             valid_values = [float(m) for m in matches if 0.0 <= float(m) <= 100.0]
             if valid_values:
                 closest_val = min(valid_values, key=lambda x: abs(x - default_val))
-                if abs(closest_val - default_val) <= 2.5:
+                if abs(closest_val - default_val) <= 5.0:
                     return closest_val, "ウェザーニュース (自動取得)"
-                    
+
         return default_val, "デフォルト値 (数値未検出または異常値)"
     except Exception:
         return default_val, "デフォルト値 (通信エラー)"
