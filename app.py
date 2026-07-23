@@ -101,7 +101,7 @@ def fetch_weather_water_level(url, default_val):
 
 @st.cache_data(ttl=3600)
 def fetch_weather_data(lat, lon):
-    url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=temperature_2m,precipitation,weathercode,sunshine_duration,shortwave_radiation,windspeed_10m&windspeed_unit=ms&past_days=14&forecast_days=7&timezone=Asia%2FTokyo"
+    url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=temperature_2m,precipitation,weathercode,sunshine_duration,shortwave_radiation,windspeed_10m&windspeed_unit=ms&past_days=14&forecast_days=7&timezone=Asia%2Tokyo"
     try:
         res = requests.get(url, timeout=10)
         data = res.json()
@@ -128,28 +128,15 @@ def get_weather_desc(code):
         return "☁️ 曇り"
 
 def optimize_river_parameters(df_weather):
-    """
-    過去の降水データからAI/最適化手法を用いて、
-    その河川の最適な減衰係数(decay_rate)と流出係数(runoff_factor)を動的に算出する
-    """
     if df_weather is None or df_weather.empty or "precipitation" not in df_weather.columns:
-        return 0.995, 0.025 # デフォルト（より緩やかな減衰）
+        return 0.995, 0.025
 
-    # 過去データの降水履歴の激しさを評価
-    recent_rain = df_weather.tail(168)["precipitation"].sum() # 直近1週間の総雨量
     max_recent_rain = df_weather.tail(168)["precipitation"].max()
-
-    # 降雨イベントの頻度や規模に応じて、森林の保水・遅延特性（減衰率）をAI的にチューニング
-    # 雨が多い環境や大雨の履歴がある場合は抜けやすさを調整し、平時は極めて高い保水力（0.993〜0.997）を持たせる
     if max_recent_rain > 20.0:
-        decay_rate = 0.992 # 降雨直後の適度な引き込み
-    else:
-        decay_rate = 0.996 # 平時：森林の保水力により極めて緩やかにしか水が抜けない
-
-    # 降水量に応じた流出係数の動的調整
-    if recent_rain > 50.0:
+        decay_rate = 0.992
         runoff_factor = 0.020
     else:
+        decay_rate = 0.996
         runoff_factor = 0.028
 
     return decay_rate, runoff_factor
@@ -157,11 +144,12 @@ def optimize_river_parameters(df_weather):
 def simulate_water_levels(df_weather, base_level, current_actual):
     decay_rate, runoff_factor = optimize_river_parameters(df_weather)
     
-    deltas = []
+    initial_runoff = current_actual - base_level
+    
+    temp_runoffs = []
     current_runoff = 0.0
     effective_rain = 0.0
-    
-    eff_decay = np.exp(-np.log(2) / 72.0) # 浸透・地下水涵養の遅延を3日スケールに拡大
+    eff_decay = np.exp(-np.log(2) / 72.0)
 
     for idx, row in df_weather.iterrows():
         rain = row["precipitation"]
@@ -171,22 +159,30 @@ def simulate_water_levels(df_weather, base_level, current_actual):
             soil_contribution = effective_rain * 0.0005
             current_runoff = current_runoff * decay_rate + (rain * runoff_factor) + soil_contribution
         else:
-            # 平時は減衰率を極めて高く（1に近い値）維持し、水が勝手に激減しないようにする
             current_runoff = current_runoff * decay_rate
-            
-        deltas.append(current_runoff)
+        temp_runoffs.append(current_runoff)
         
-    df_weather["simulated_delta"] = deltas
+    df_weather["temp_runoff"] = temp_runoffs
     
     now = pd.Timestamp.now()
     if not df_weather[df_weather["time"] <= now].empty:
         idx_now = (df_weather["time"] - now).abs().argsort()[:1].values[0]
-        delta_at_now = df_weather.loc[idx_now, "simulated_delta"]
+        runoff_at_now = df_weather.loc[idx_now, "temp_runoff"]
     else:
-        delta_at_now = 0.0
-
-    df_weather["simulated_level"] = current_actual + (df_weather["simulated_delta"] - delta_at_now)
+        runoff_at_now = 0.0
+        
+    offset = initial_runoff - runoff_at_now
     
+    final_levels = []
+    for idx, row in df_weather.iterrows():
+        r = row["temp_runoff"] + offset
+        simulated_lvl = base_level + r
+        # 渇水による極端な暴落（川が消滅するような数値）を防ぐための下限リミッター
+        min_possible_level = base_level - 0.25
+        simulated_lvl = max(min_possible_level, simulated_lvl)
+        final_levels.append(simulated_lvl)
+        
+    df_weather["simulated_level"] = final_levels
     return df_weather
 
 def analyze_condition(df_weather, river_info, user_logs, target_river, target_date, current_actual):
