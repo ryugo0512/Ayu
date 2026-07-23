@@ -12,6 +12,7 @@ import altair as alt
 st.set_page_config(page_title="北海道 鮎コンディション判定", page_icon="🐟", layout="wide")
 
 LOG_FILE = "fishing_logs.json"
+WATER_LOG_FILE = "water_levels_history.json"
 
 def load_logs():
     if os.path.exists(LOG_FILE):
@@ -33,6 +34,20 @@ def delete_log(index):
     if 0 <= index < len(logs):
         logs.pop(index)
         save_logs(logs)
+
+def load_water_history():
+    if os.path.exists(WATER_LOG_FILE):
+        with open(WATER_LOG_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+def save_water_history(river_name, timestamp_str, level):
+    history = load_water_history()
+    if river_name not in history:
+        history[river_name] = {}
+    history[river_name][timestamp_str] = level
+    with open(WATER_LOG_FILE, "w", encoding="utf-8") as f:
+        json.dump(history, f, ensure_ascii=False, indent=2)
 
 RIVERS = {
     "尻別川本流（名駒）": {
@@ -158,7 +173,7 @@ def get_weather_desc(code):
     else:
         return "☁️ 曇り"
 
-def simulate_water_levels(df_weather, base_level, current_actual, river_decay_rate):
+def simulate_water_levels(df_weather, base_level, current_actual, river_decay_rate, river_name):
     if df_weather is None or df_weather.empty or "precipitation" not in df_weather.columns:
         df_weather = pd.DataFrame({
             "time": [pd.Timestamp.now()],
@@ -171,60 +186,63 @@ def simulate_water_levels(df_weather, base_level, current_actual, river_decay_ra
         })
         return df_weather
 
-    max_recent_rain = df_weather.tail(168)["precipitation"].max() if len(df_weather) >= 168 else 0.0
-    decay_rate = river_decay_rate if max_recent_rain <= 20.0 else river_decay_rate - 0.003
-    runoff_factor = 0.020 if max_recent_rain > 20.0 else 0.028
-    
-    initial_runoff = current_actual - base_level
-    
-    temp_runoffs = []
-    current_runoff = 0.0
-    effective_rain = 0.0
-    eff_decay = np.exp(-np.log(2) / 72.0)
+    df_weather = df_weather.sort_values("time").reset_index(drop=True)
+    history = load_water_history().get(river_name, {})
 
-    for idx, row in df_weather.iterrows():
-        rain = row.get("precipitation", 0.0)
+    now = pd.Timestamp.now().floor("h")
+    
+    runoffs = np.zeros(len(df_weather))
+    effective_rain = 0.0
+    eff_decay = np.exp(-np.log(2) / 48.0)
+    runoff_factor = 0.035
+
+    for i in range(len(df_weather)):
+        rain = df_weather.loc[i, "precipitation"]
         effective_rain = effective_rain * eff_decay + rain
-        
-        if rain > 0.1:
-            soil_contribution = effective_rain * 0.0005
-            current_runoff = current_runoff * decay_rate + (rain * runoff_factor) + soil_contribution
+        runoffs[i] = rain * runoff_factor + effective_rain * 0.001
+
+    time_diffs = (df_weather["time"] - now).abs()
+    now_idx = int(time_diffs.idxmin())
+
+    simulated_levels = np.zeros(len(df_weather))
+
+    # 過去データ：蓄積された実効履歴があればそれを使い、なければ基準水位または現在実測値
+    for i in range(len(df_weather)):
+        t_str = df_weather.loc[i, "time"].strftime("%Y-%m-%d %H:00")
+        t = df_weather.loc[i, "time"]
+        if t <= now:
+            if t_str in history:
+                simulated_levels[i] = history[t_str]
+            else:
+                simulated_levels[i] = current_actual if i == now_idx else base_level
+
+    simulated_levels[now_idx] = current_actual
+
+    # 未来方向のみ降水予報に基づいてシミュレーション予測
+    curr_lvl = current_actual
+    for i in range(now_idx + 1, len(df_weather)):
+        rain_imp = runoffs[i]
+        diff_from_base = curr_lvl - base_level
+        if diff_from_base > 0:
+            next_diff = diff_from_base * river_decay_rate + rain_imp
         else:
-            current_runoff = current_runoff * decay_rate
-        temp_runoffs.append(current_runoff)
-        
-    df_weather["temp_runoff"] = temp_runoffs
-    
-    now = pd.Timestamp.now()
-    if "time" in df_weather.columns and not df_weather[df_weather["time"] <= now].empty:
-        idx_now = (df_weather["time"] - now).abs().argsort()[:1].values[0]
-        runoff_at_now = df_weather.loc[idx_now, "temp_runoff"]
-    else:
-        runoff_at_now = 0.0
-        
-    offset = initial_runoff - runoff_at_now
-    
-    final_levels = []
-    for idx, row in df_weather.iterrows():
-        r = row.get("temp_runoff", 0.0) + offset
-        simulated_lvl = base_level + r
-        min_possible_level = base_level - 0.25
-        simulated_lvl = max(min_possible_level, simulated_lvl)
-        final_levels.append(simulated_lvl)
-        
-    df_weather["simulated_level"] = final_levels
+            next_diff = diff_from_base + rain_imp
+        curr_lvl = base_level + max(-0.25, next_diff)
+        simulated_levels[i] = curr_lvl
+
+    df_weather["simulated_level"] = simulated_levels
     return df_weather
 
 def analyze_condition(df_weather, is_weather_live, river_info, user_logs, target_river, target_date, current_actual):
     effective_base = river_info["base_level"]
-    river_decay_rate = river_info.get("decay_rate", 0.997)
+    river_decay_rate = river_info.get("decay_rate", 0.9975)
 
-    df_weather = simulate_water_levels(df_weather, effective_base, current_actual, river_decay_rate)
+    df_weather = simulate_water_levels(df_weather, effective_base, current_actual, river_decay_rate, target_river)
 
     target_datetime = datetime.datetime.combine(target_date, datetime.time(12, 0))
 
     bias_growth = 0.0
-    river_logs = [l for l in user_logs if l.get("river") == target_river]
+    river_logs = [l for l in user_logs if l.get("river"] == target_river]
     if len(river_logs) > 0:
         feedbacks = [l.get("moss_feedback", 0) for l in river_logs]
         bias_growth = np.mean(feedbacks) * 0.1
@@ -409,6 +427,10 @@ river_info = RIVERS[target_river]
 
 current_actual, fetch_source = fetch_weather_water_level(river_info["weather_url"], river_info["default_actual"])
 
+# 現在の実測値を履歴に蓄積保存
+now_hour_str = pd.Timestamp.now().strftime("%Y-%m-%d %H:00")
+save_water_history(target_river, now_hour_str, current_actual)
+
 col_caption1, col_caption2 = st.columns([3, 1])
 with col_caption1:
     st.caption(f"観測所: {river_info['station_name']}（{river_info['river_system']}） / 基準水位線: {river_info['base_level']:.2f}m / 現在実測値: {current_actual:.2f}m ({fetch_source})")
@@ -486,7 +508,7 @@ if not res["target_df"].empty:
     st.dataframe(table_df.T, use_container_width=True)
 
 st.markdown("---")
-st.subheader("水位グラフ（基準水位線 & 天気予報AI予測）")
+st.subheader("水位グラフ（基準水位線 & 蓄積データ・天気予報予測）")
 
 graph_range = st.radio(
     "グラフの表示期間を選択してください",
