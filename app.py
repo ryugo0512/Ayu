@@ -83,7 +83,6 @@ def fetch_weather_and_hydro(lat, lon):
 
 @st.cache_data(ttl=900)
 def fetch_real_water_level(stg_id):
-    # 危機管理型水位計などの場合、通常の水位APIとパスが異なることがあるため例外処理を堅牢化
     url = f"https://www.river.go.jp/kawabou/api/v1/waterlevel/latest?stationCode={stg_id}"
     try:
         res = requests.get(url, timeout=5)
@@ -528,4 +527,10 @@ if user_logs:
         for idx, log in enumerate(user_logs):
             c1, c2, c3, c4, c5 = st.columns([2, 3, 2, 3, 2])
             c1.write(f"📅 {log.get('date')}")
-            c2.write(f"🌊 {lo
+            c2.write(f"🌊 {log.get('river', '未設定')}")
+            c3.write(f"🐟 {log.get('catch')} 匹")
+            c4.write(f"🪨 {log.get('moss_condition')}")
+            if c5.button("削除", key=f"del_{idx}"):
+                delete_log(idx)
+                st.success("ログを削除しました。")
+                st.rerun()
