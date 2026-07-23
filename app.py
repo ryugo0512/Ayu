@@ -38,28 +38,28 @@ RIVERS = {
         "lat": 42.8021, "lon": 140.5251, "base_level": 1.81, "default_actual": 1.81,
         "station_name": "名駒", "river_system": "尻別川水系 尻別川",
         "weather_url": "https://weathernews.jp/onebox/river/shiribetsugawa/?pid=2078700400005",
-        "runoff_factor": 0.025, "decay_rate": 0.98, "drought_rate": 0.0001,
+        "runoff_factor": 0.025, "decay_rate": 0.95,
         "temp_base": 11.0, "temp_factor": 0.35, "max_temp": 21.5
     },
     "昆布川（昆布）": {
         "lat": 42.7958, "lon": 140.5986, "base_level": 43.58, "default_actual": 43.58,
         "station_name": "昆布川橋", "river_system": "尻別川水系 昆布川",
         "weather_url": "https://weathernews.jp/onebox/river/shiribetsugawa/?pid=0025700400389",
-        "runoff_factor": 0.030, "decay_rate": 0.98, "drought_rate": 0.0001,
+        "runoff_factor": 0.030, "decay_rate": 0.95,
         "temp_base": 10.5, "temp_factor": 0.38, "max_temp": 21.0
     },
     "天ノ川（上ノ国）": {
         "lat": 41.7997, "lon": 140.1163, "base_level": 1.60, "default_actual": 1.60,
         "station_name": "古守大橋", "river_system": "天ノ川水系 天ノ川",
         "weather_url": "https://weathernews.jp/onebox/river/?pid=0025700400132",
-        "runoff_factor": 0.030, "decay_rate": 0.98, "drought_rate": 0.0001,
+        "runoff_factor": 0.030, "decay_rate": 0.95,
         "temp_base": 12.0, "temp_factor": 0.40, "max_temp": 22.5
     },
     "朱太川（黒松内）": {
         "lat": 42.6683, "lon": 140.3061, "base_level": 1.44, "default_actual": 1.44,
         "station_name": "朱太川実橋", "river_system": "朱太川水系 朱太川",
         "weather_url": "https://weathernews.jp/onebox/river/shubutogawa/?pid=0025700400387",
-        "runoff_factor": 0.035, "decay_rate": 0.98, "drought_rate": 0.0001,
+        "runoff_factor": 0.035, "decay_rate": 0.95,
         "temp_base": 11.5, "temp_factor": 0.38, "max_temp": 22.0
     }
 }
@@ -131,31 +131,25 @@ def get_weather_desc(code):
     else:
         return "☁️ 曇り"
 
-def simulate_water_levels(df_weather, base_level, current_actual, runoff_factor, decay_rate, drought_rate):
+def simulate_water_levels(df_weather, base_level, current_actual, runoff_factor, decay_rate):
     deltas = []
     current_runoff = 0.0
     effective_rain = 0.0
-    dry_hours = 0
     
-    eff_decay = np.exp(-np.log(2) / 72.0)
+    eff_decay = np.exp(-np.log(2) / 48.0)
 
     for idx, row in df_weather.iterrows():
         rain = row["precipitation"]
-        
         effective_rain = effective_rain * eff_decay + rain
         
         if rain > 0.2:
-            dry_hours = 0
-            soil_contribution = effective_rain * 0.0008
+            soil_contribution = effective_rain * 0.001
             current_runoff = current_runoff * decay_rate + (rain * runoff_factor) + soil_contribution
-            drought_offset = 0.0
         else:
-            dry_hours += 1
+            # 雨がないときはランオフが減衰してゼロ（平水）に向かうのみ（マイナスにはしない）
             current_runoff = current_runoff * decay_rate
-            drought_offset = min(0.05, dry_hours * drought_rate)
             
-        delta_val = current_runoff - drought_offset
-        deltas.append(delta_val)
+        deltas.append(current_runoff)
         
     df_weather["simulated_delta"] = deltas
     
@@ -166,7 +160,7 @@ def simulate_water_levels(df_weather, base_level, current_actual, runoff_factor,
     else:
         delta_at_now = 0.0
 
-    # 現在実測値を基準にして、未来の増減（デルタ）だけを反映する
+    # 現在実測値をアンカーとし、降雨による増減分のみを反映する
     df_weather["simulated_level"] = current_actual + (df_weather["simulated_delta"] - delta_at_now)
     
     return df_weather
@@ -202,8 +196,7 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
         effective_base, 
         current_actual,
         river_info["runoff_factor"], 
-        river_info["decay_rate"],
-        river_info["drought_rate"]
+        river_info["decay_rate"]
     )
 
     target_datetime = datetime.datetime.combine(target_date, datetime.time(12, 0))
@@ -288,6 +281,7 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
 
     level_diff = display_water_level - effective_base
     
+    # 判定：通常水位より -10cm (-0.10m) 未満で渇水傾向
     if level_diff < -0.10:
         level_trend = f"📉 渇水傾向 ({level_diff*100:+.0f}cm)"
     elif level_diff <= 0.15:
@@ -331,9 +325,9 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
 
     # 水位異常による厳格なスコア制限（渇水・高水ペナルティ）
     if level_diff < -0.20:
-        score = min(score, 3)  # 大幅渇水時は星3以下
+        score = min(score, 3)
     elif level_diff < -0.10:
-        score = min(score, 5)  # 渇水傾向時は星5以下
+        score = min(score, 5)
     
     if level_diff >= 0.50:
         score = 1
@@ -411,12 +405,12 @@ with col_alert2:
         st.success(f"コンディション: {res['moss_alert']}")
 
 if res["level_diff"] >= 0.50:
-    st.error(f"大増水（釣り困難）: 基準水位より +{res['level_diff']*100:.0f}cm と大幅な増水が予想されます。垢が飛んでいる可能性が高く、立ち込みは非常に危険です。")
+    st.error(f"大増水（釣り困難）: 基準水位より +{res['level_diff']*100:.0f}cm と大幅な増水が予想されます。")
 elif res["level_diff"] >= 0.30:
-    st.warning(f"高水注意: 基準水位より +{res['level_diff']*100:.0f}cm 高めです（水量が多く釣りにくい状態の可能性があります）。")
+    st.warning(f"高水注意: 基準水位より +{res['level_diff']*100:.0f}cm 高めです。")
 
 if res["max_wind"] >= 6.0:
-    st.error(f"強風注意: 予想最大風速 {res['max_wind']:.1f} m/s （長尺竿の操作・保持にご注意ください）")
+    st.error(f"強風注意: 予想最大風速 {res['max_wind']:.1f} m/s")
 
 col1, col2, col3, col4, col5, col6 = st.columns(6)
 col1.metric("水位状況", f"{res['water_level']:.2f} m", res["level_trend"])
@@ -465,7 +459,6 @@ if not res["df_hydro"].empty:
     chart_hydro = chart_hydro.set_index("時間")
     
     st.line_chart(chart_hydro[["シミュレーション水位(m)", "基準水位線(m)"]])
-    st.caption(f"※ シミュレーション水位：気象予報（雨量・気温）を基にしたAI予測値 / 基準水位線：{target_river}の基準線（{river_info['base_level']:.2f}m）")
 
 st.markdown("---")
 st.subheader("釣行日の水温推移 & ベスト時合予測")
@@ -494,17 +487,15 @@ over_hours = [i for i, t in enumerate(temp_data) if t > 24.0]
 
 if best_hours:
     b_start, b_end = min(best_hours), max(best_hours)
-    st.success(f"ベスト時合 (20℃〜24℃): {b_start:02d}:00 ～ {b_end:02d}:00（追い・ハミ出しともに最高潮の黄金タイムです）")
+    st.success(f"ベスト時合 (20℃〜24℃): {b_start:02d}:00 ～ {b_end:02d}:00")
 
 if upward_hours:
     u_start, u_end = min(upward_hours), max(upward_hours)
-    st.info(f"活性上向き (18℃〜19.9℃): {u_start:02d}:00 ～ {u_end:02d}:00（ハミ出しや追いが活発になり始める時間帯です）")
-elif not best_hours:
-    st.warning("時合注意: 全体的に水温が低めまたは高めの推移です。水温変化のタイミングを狙ってください。")
+    st.info(f"活性上向き (18℃〜19.9℃): {u_start:02d}:00 ～ {u_end:02d}:00")
 
 if over_hours:
     o_start, o_end = min(over_hours), max(over_hours)
-    st.warning(f"高水温注意 (24℃超): {o_start:02d}:00 ～ {o_end:02d}:00（高水温により鮎がヘバる可能性がある時間帯です）")
+    st.warning(f"高水温注意 (24℃超): {o_start:02d}:00 ～ {o_end:02d}:00")
 
 st.markdown("---")
 st.subheader("実釣ログの記録（学習用）")
@@ -537,7 +528,7 @@ with st.form("log_form"):
             "moss_feedback": feedback_map[moss_condition]
         }
         save_log(log_entry)
-        st.success("実釣ログを保存しました！次回以降の予測精度に自動反映されます。")
+        st.success("実釣ログを保存しました！")
         st.rerun()
 
 if user_logs:
