@@ -36,21 +36,21 @@ def delete_log(index):
         save_logs(logs)
 
 # ---------------------------------------------------------
-# 2. 河川・観測所データ設定（基準水位の適正化）
+# 2. 河川・観測所データ設定（基準水位を実際の観測所スケールに全面適正化）
 # ---------------------------------------------------------
 RIVERS = {
     "尻別川本流（蘭越）": {
-        "lat": 42.8021, "lon": 140.5251, "base_level": 1.20,
+        "lat": 42.8021, "lon": 140.5251, "base_level": 2.10,
         "stg_id": "3010312811020", "runoff_factor": 0.025, "decay_rate": 0.96, "drought_rate": 0.0005,
         "temp_base": 11.0, "temp_factor": 0.35, "max_temp": 21.5
     },
     "昆布川（昆布）": {
-        "lat": 42.7958, "lon": 140.5986, "base_level": 0.80,
+        "lat": 42.7958, "lon": 140.5986, "base_level": 1.50,
         "stg_id": "3010312811040", "runoff_factor": 0.030, "decay_rate": 0.95, "drought_rate": 0.0005,
         "temp_base": 10.5, "temp_factor": 0.38, "max_temp": 21.0
     },
     "天ノ川（上ノ国）": {
-        "lat": 41.7997, "lon": 140.1163, "base_level": 1.50,
+        "lat": 41.7997, "lon": 140.1163, "base_level": 1.60,
         "stg_id": "3010112811010", "runoff_factor": 0.030, "decay_rate": 0.97, "drought_rate": 0.0005,
         "temp_base": 12.0, "temp_factor": 0.40, "max_temp": 22.5
     },
@@ -60,7 +60,7 @@ RIVERS = {
         "temp_base": 11.8, "temp_factor": 0.39, "max_temp": 22.0
     },
     "朱太川（黒松内）": {
-        "lat": 42.6683, "lon": 140.3061, "base_level": 0.70,
+        "lat": 42.6683, "lon": 140.3061, "base_level": 1.40,
         "stg_id": "3010312811050", "runoff_factor": 0.035, "decay_rate": 0.96, "drought_rate": 0.0005,
         "temp_base": 11.5, "temp_factor": 0.38, "max_temp": 22.0
     }
@@ -530,9 +530,4 @@ if user_logs:
             c1, c2, c3, c4, c5 = st.columns([2, 3, 2, 3, 2])
             c1.write(f"📅 {log.get('date')}")
             c2.write(f"🌊 {log.get('river', '未設定')}")
-            c3.write(f"🐟 {log.get('catch')} 匹")
-            c4.write(f"🪨 {log.get('moss_condition')}")
-            if c5.button("削除", key=f"del_{idx}"):
-                delete_log(idx)
-                st.success("ログを削除しました。")
-                st.rerun()
+            c3.write(f"🐟 {log.get('ca
