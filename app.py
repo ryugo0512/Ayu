@@ -232,7 +232,6 @@ def analyze_condition(df_weather, is_weather_live, river_info, user_logs, target
     raw_water_temp = adjusted_temp_base + (df_weather[temp_col] * river_info["temp_factor"])
     df_weather["estimated_water_temp"] = np.minimum(raw_water_temp, river_info["max_temp"])
 
-    # 列を追加した後に target_df を作成するよう修正
     target_df = df_weather[df_weather["time"].dt.date == target_date].copy() if "time" in df_weather.columns else pd.DataFrame()
     has_precipitation_data = is_weather_live and not target_df.empty and len(target_df) >= 24
 
@@ -345,11 +344,15 @@ def analyze_condition(df_weather, is_weather_live, river_info, user_logs, target
 
     score = max(1, min(raw_score, max_cap))
 
-    if level_diff < -0.20:
-        score = min(score, 3)
-    elif level_diff < -0.10:
-        score = min(score, 5)
+    if level_diff <= -0.30:
+        score -= 3
+    elif level_diff <= -0.20:
+        score -= 2
+    elif level_diff < 0:
+        score -= 1
     
+    score = max(1, score)
+
     if level_diff >= 0.50:
         score = 1
     elif level_diff >= 0.30:
@@ -390,7 +393,12 @@ with col_sel1:
     target_river = st.selectbox("河川を選択してください", list(RIVERS.keys()))
 with col_sel2:
     today_date = datetime.date.today()
-    target_date = st.date_input("釣行予定日を選択", today_date, min_value=today_date - datetime.timedelta(days=7), max_value=today_date + datetime.timedelta(days=5))
+    target_date = st.date_input(
+        "釣行予定日を選択", 
+        today_date, 
+        min_value=today_date - datetime.timedelta(days=7), 
+        max_value=today_date + datetime.timedelta(days=5)
+    )
 
 river_info = RIVERS[target_river]
 
@@ -438,15 +446,25 @@ if res["max_wind"] >= 6.0:
     st.error(f"強風注意: 予想最大風速 {res['max_wind']:.1f} m/s")
 
 col1, col2, col3, col4, col5, col6 = st.columns(6)
-col1.metric("水位状況", f"{res['water_level']:.2f} m", res["level_trend"])
+
+if target_date > today_date:
+    level_trend_display = f"{res['level_trend']}\n\n※水位は降水予報を見て表示している予測です"
+else:
+    level_trend_display = res["level_trend"]
+
+col1.metric("水位状況", f"{res['water_level']:.2f} m", level_trend_display)
 col2.metric("天気", res["weather_desc"])
 col3.metric("予想気温", f"{res['temp_max']:.1f}℃", f"最低 {res['temp_min']:.1f}℃")
 col4.metric("推計水温", f"{res['water_temp_max']:.1f}℃", f"平均 {res['water_temp_avg']:.1f}℃")
 col5.metric("ハミ垢生育度", f"{res['moss_growth']} %")
 col6.metric("最大風速", f"{res['max_wind']:.1f} m/s")
 
+if target_date > today_date:
+    st.caption("※水位は降水予報を見て表示している予測です")
+
+st.markdown(f"### 🌊 大水（＋50cm目安）からの経過日数: **{res['days_since_flood']} 日**")
 st.write(f"濁り・澄み具合予測: {res['clarity_recovery']}")
-st.caption(f"※ 垢育成シーズンモード: {res['season_mode']} / 大水（＋50cm目安）からの経過日数: {res['days_since_flood']}日")
+st.caption(f"※ 垢育成シーズンモード: {res['season_mode']}")
 
 st.markdown("---")
 st.subheader(f"{target_date.strftime('%m月%d日')} の1時間ごとのピンポイント天気予報")
