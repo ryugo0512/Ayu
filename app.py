@@ -36,7 +36,7 @@ def delete_log(index):
         save_logs(logs)
 
 # ---------------------------------------------------------
-# 2. 河川・観測所データ設定（上ノ沢川追加）
+# 2. 河川・観測所データ設定（基準水位の適正化）
 # ---------------------------------------------------------
 RIVERS = {
     "尻別川本流（蘭越）": {
@@ -50,12 +50,12 @@ RIVERS = {
         "temp_base": 10.5, "temp_factor": 0.38, "max_temp": 21.0
     },
     "天ノ川（上ノ国）": {
-        "lat": 41.7997, "lon": 140.1163, "base_level": 0.90,
+        "lat": 41.7997, "lon": 140.1163, "base_level": 1.50,
         "stg_id": "3010112811010", "runoff_factor": 0.030, "decay_rate": 0.97, "drought_rate": 0.0005,
         "temp_base": 12.0, "temp_factor": 0.40, "max_temp": 22.5
     },
     "上ノ沢川（天ノ川水系）": {
-        "lat": 41.7554, "lon": 140.2321, "base_level": -3.00,
+        "lat": 41.7554, "lon": 140.2321, "base_level": 1.70,
         "stg_id": "100000492", "runoff_factor": 0.028, "decay_rate": 0.96, "drought_rate": 0.0005,
         "temp_base": 11.8, "temp_factor": 0.39, "max_temp": 22.0
     },
@@ -88,7 +88,9 @@ def fetch_real_water_level(stg_id):
         res = requests.get(url, timeout=5)
         if res.status_code == 200:
             data = res.json()
-            return float(data.get("waterLevel", None))
+            val = data.get("waterLevel", None)
+            if val is not None:
+                return float(val)
     except Exception:
         pass
     return None
@@ -154,11 +156,11 @@ def simulate_water_levels(df_weather, base_level, runoff_factor, decay_rate, dro
 # ---------------------------------------------------------
 def analyze_condition(df_weather, river_info, user_logs, target_river, target_date):
     real_level = fetch_real_water_level(river_info["stg_id"])
+    effective_base = real_level if real_level is not None else river_info["base_level"]
 
     if df_weather is None or df_weather.empty:
-        current_level = real_level if real_level is not None else river_info["base_level"]
         return {
-            "water_level": current_level,
+            "water_level": effective_base,
             "level_is_real": real_level is not None,
             "level_trend": "平水（安定）",
             "days_since_flood": 4,
@@ -182,7 +184,7 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
 
     df_weather = simulate_water_levels(
         df_weather, 
-        river_info["base_level"], 
+        effective_base, 
         river_info["runoff_factor"], 
         river_info["decay_rate"],
         river_info["drought_rate"],
@@ -259,13 +261,13 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
         max_wind = target_df["windspeed_10m"].max() if "windspeed_10m" in target_df.columns else 0.0
     else:
         hourly_water_temp = [14.0 + (i if i <= 14 else 28 - i) * 0.3 for i in range(24)]
-        current_sim_level = real_level if real_level is not None else river_info["base_level"]
+        current_sim_level = effective_base
         weather_desc = "☀️ 晴れ"
         temp_max, temp_min = 22.0, 16.0
         water_temp_max, water_temp_avg = 17.5, 15.8
         max_wind = 2.0
 
-    level_diff = current_sim_level - river_info["base_level"]
+    level_diff = current_sim_level - effective_base
     if level_diff < -0.08:
         level_trend = "📉 渇水傾向（減水）"
     elif level_diff > 0.05:
@@ -313,7 +315,7 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
         score = min(score, 3)
 
     df_hydro = df_weather.copy()
-    df_hydro["base_level"] = river_info["base_level"]
+    df_hydro["base_level"] = effective_base
 
     return {
         "water_level": current_sim_level,
