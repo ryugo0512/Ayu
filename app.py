@@ -49,6 +49,35 @@ def save_water_history(river_name, timestamp_str, level):
     with open(WATER_LOG_FILE, "w", encoding="utf-8") as f:
         json.dump(history, f, ensure_ascii=False, indent=2)
 
+def estimate_dynamic_decay_rate(river_name, base_level, default_decay):
+    history = load_water_history().get(river_name, {})
+    if len(history) < 10:
+        return default_decay
+    
+    sorted_times = sorted(history.keys())
+    ratios = []
+    for i in range(1, len(sorted_times)):
+        t_prev, t_curr = sorted_times[i-1], sorted_times[i]
+        l_prev = history[t_prev]
+        l_curr = history[t_curr]
+        
+        try:
+            dt = (pd.to_datetime(t_curr) - pd.to_datetime(t_prev)).total_seconds() / 3600.0
+            if 0.8 <= dt <= 1.5:
+                if l_prev > base_level and l_curr > base_level and l_curr < l_prev:
+                    diff_prev = l_prev - base_level
+                    diff_curr = l_curr - base_level
+                    ratio = (diff_curr / diff_prev) ** (1.0 / dt)
+                    if 0.90 <= ratio <= 0.9999:
+                        ratios.append(ratio)
+        except Exception:
+            continue
+            
+    if len(ratios) >= 5:
+        dynamic_rate = float(np.median(ratios))
+        return dynamic_rate
+    return default_decay
+
 RIVERS = {
     "尻別川本流（名駒）": {
         "lat": 42.8021, "lon": 140.5251, "base_level": 1.81, "default_actual": 1.81,
@@ -206,7 +235,6 @@ def simulate_water_levels(df_weather, base_level, current_actual, river_decay_ra
 
     simulated_levels[now_idx] = current_actual
 
-    # 未来のシミュレーションは現在の実測値(current_actual)を起点とし、未来の雨のみで計算する
     curr_lvl = current_actual
     eff_decay = np.exp(-np.log(2) / 48.0)
     runoff_factor = 0.035
@@ -230,7 +258,10 @@ def simulate_water_levels(df_weather, base_level, current_actual, river_decay_ra
 
 def analyze_condition(df_weather, is_weather_live, river_info, user_logs, target_river, target_date, current_actual):
     effective_base = river_info["base_level"]
-    river_decay_rate = river_info.get("decay_rate", 0.9975)
+    default_decay = river_info.get("decay_rate", 0.9975)
+    
+    # 動的学習された減衰率を適用
+    river_decay_rate = estimate_dynamic_decay_rate(target_river, effective_base, default_decay)
 
     df_weather = simulate_water_levels(df_weather, effective_base, current_actual, river_decay_rate, target_river)
 
@@ -401,7 +432,8 @@ def analyze_condition(df_weather, is_weather_live, river_info, user_logs, target
         "water_temp_avg": water_temp_avg,
         "max_wind": max_wind,
         "level_diff": level_diff,
-        "has_precipitation_data": has_precipitation_data
+        "has_precipitation_data": has_precipitation_data,
+        "learned_decay": river_decay_rate
     }
 
 st.title("北海道 鮎コンディション判定 & 未来予測")
@@ -425,16 +457,16 @@ current_actual, fetch_source = fetch_weather_water_level(river_info["weather_url
 now_hour_str = pd.Timestamp.now().strftime("%Y-%m-%d %H:00")
 save_water_history(target_river, now_hour_str, current_actual)
 
-col_caption1, col_caption2 = st.columns([3, 1])
-with col_caption1:
-    st.caption(f"観測所: {river_info['station_name']}（{river_info['river_system']}） / 基準水位線: {river_info['base_level']:.2f}m / 現在実測値: {current_actual:.2f}m ({fetch_source})")
-with col_caption2:
-    if river_info["weather_url"]:
-        st.markdown(f"[ウェザーニュースページ]({river_info['weather_url']})")
-
 df_weather, is_weather_live = fetch_weather_data(river_info["lat"], river_info["lon"])
 user_logs = load_logs()
 res = analyze_condition(df_weather, is_weather_live, river_info, user_logs, target_river, target_date, current_actual)
+
+col_caption1, col_caption2 = st.columns([3, 1])
+with col_caption1:
+    st.caption(f"観測所: {river_info['station_name']}（{river_info['river_system']}） / 基準水位線: {river_info['base_level']:.2f}m / 現在実測値: {current_actual:.2f}m ({fetch_source}) [学習減衰率: {res['learned_decay']:.4f}]")
+with col_caption2:
+    if river_info["weather_url"]:
+        st.markdown(f"[ウェザーニュースページ]({river_info['weather_url']})")
 
 if not res["has_precipitation_data"]:
     st.warning("⚠️ 選択された日程の信頼できる降水データがありません（予報範囲外または通信エラー）。水位シミュレーションは降水量を0として計算しています。")
