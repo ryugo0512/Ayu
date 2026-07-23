@@ -38,28 +38,28 @@ RIVERS = {
         "lat": 42.8021, "lon": 140.5251, "base_level": 1.81, "default_actual": 1.81,
         "station_name": "名駒", "river_system": "尻別川水系 尻別川",
         "weather_url": "https://weathernews.jp/onebox/river/shiribetsugawa/?pid=2078700400005",
-        "runoff_factor": 0.025, "decay_rate": 0.96, "drought_rate": 0.0005,
+        "runoff_factor": 0.025, "decay_rate": 0.98, "drought_rate": 0.0001,
         "temp_base": 11.0, "temp_factor": 0.35, "max_temp": 21.5
     },
     "昆布川（昆布）": {
         "lat": 42.7958, "lon": 140.5986, "base_level": 43.58, "default_actual": 43.58,
         "station_name": "昆布川橋", "river_system": "尻別川水系 昆布川",
         "weather_url": "https://weathernews.jp/onebox/river/shiribetsugawa/?pid=0025700400389",
-        "runoff_factor": 0.030, "decay_rate": 0.95, "drought_rate": 0.0005,
+        "runoff_factor": 0.030, "decay_rate": 0.98, "drought_rate": 0.0001,
         "temp_base": 10.5, "temp_factor": 0.38, "max_temp": 21.0
     },
     "天ノ川（上ノ国）": {
         "lat": 41.7997, "lon": 140.1163, "base_level": 1.60, "default_actual": 1.60,
         "station_name": "古守大橋", "river_system": "天ノ川水系 天ノ川",
         "weather_url": "https://weathernews.jp/onebox/river/?pid=0025700400132",
-        "runoff_factor": 0.030, "decay_rate": 0.97, "drought_rate": 0.0005,
+        "runoff_factor": 0.030, "decay_rate": 0.98, "drought_rate": 0.0001,
         "temp_base": 12.0, "temp_factor": 0.40, "max_temp": 22.5
     },
     "朱太川（黒松内）": {
         "lat": 42.6683, "lon": 140.3061, "base_level": 1.44, "default_actual": 1.44,
         "station_name": "朱太川実橋", "river_system": "朱太川水系 朱太川",
         "weather_url": "https://weathernews.jp/onebox/river/shubutogawa/?pid=0025700400387",
-        "runoff_factor": 0.035, "decay_rate": 0.96, "drought_rate": 0.0005,
+        "runoff_factor": 0.035, "decay_rate": 0.98, "drought_rate": 0.0001,
         "temp_base": 11.5, "temp_factor": 0.38, "max_temp": 22.0
     }
 }
@@ -137,7 +137,7 @@ def simulate_water_levels(df_weather, base_level, current_actual, runoff_factor,
     effective_rain = 0.0
     dry_hours = 0
     
-    eff_decay = np.exp(-np.log(2) / 48.0)
+    eff_decay = np.exp(-np.log(2) / 72.0)
 
     for idx, row in df_weather.iterrows():
         rain = row["precipitation"]
@@ -147,14 +147,14 @@ def simulate_water_levels(df_weather, base_level, current_actual, runoff_factor,
         
         if rain > 0.2:
             dry_hours = 0
-            soil_contribution = effective_rain * 0.0015
+            soil_contribution = effective_rain * 0.001
             current_runoff = current_runoff * decay_rate + (rain * runoff_factor) + soil_contribution
             drought_offset = 0.0
         else:
             dry_hours += 1
             current_runoff = current_runoff * decay_rate
-            temp_penalty = max(1.0, temp / 22.0)
-            drought_offset = min(0.20, dry_hours * drought_rate * temp_penalty)
+            # 渇水による低下幅を最大でも 0.15m (15cm) までに強く制限
+            drought_offset = min(0.15, dry_hours * drought_rate)
             
         calculated_level = base_level + current_runoff - drought_offset
         levels.append(calculated_level)
