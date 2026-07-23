@@ -26,17 +26,29 @@ def save_log(log_entry):
         json.dump(logs, f, ensure_ascii=False, indent=2)
 
 # ---------------------------------------------------------
-# 2. 河川・観測所データ設定（引き水を緩やかに・渇水ペースを大幅減速）
+# 2. 河川・観測所データ設定（国交省観測所ID追加）
 # ---------------------------------------------------------
 RIVERS = {
-    "尻別川本流（蘭越）": {"lat": 42.8021, "lon": 140.5251, "base_level": 1.20, "runoff_factor": 0.025, "decay_rate": 0.92, "drought_rate": 0.0010},
-    "昆布川（昆布）": {"lat": 42.7958, "lon": 140.5986, "base_level": 0.80, "runoff_factor": 0.030, "decay_rate": 0.88, "drought_rate": 0.0012},
-    "天ノ川（上ノ国）": {"lat": 41.7997, "lon": 140.1163, "base_level": 0.90, "runoff_factor": 0.028, "decay_rate": 0.90, "drought_rate": 0.0010},
-    "朱太川（黒松内）": {"lat": 42.6683, "lon": 140.3061, "base_level": 0.70, "runoff_factor": 0.032, "decay_rate": 0.89, "drought_rate": 0.0012}
+    "尻別川本流（蘭越）": {
+        "lat": 42.8021, "lon": 140.5251, "base_level": 1.20,
+        "stg_id": "3010312811020", "runoff_factor": 0.025, "decay_rate": 0.96, "drought_rate": 0.0005
+    },
+    "昆布川（昆布）": {
+        "lat": 42.7958, "lon": 140.5986, "base_level": 0.80,
+        "stg_id": "3010312811040", "runoff_factor": 0.030, "decay_rate": 0.95, "drought_rate": 0.0005
+    },
+    "天ノ川（上ノ国）": {
+        "lat": 41.7997, "lon": 140.1163, "base_level": 0.90,
+        "stg_id": "3010112811010", "runoff_factor": 0.030, "decay_rate": 0.97, "drought_rate": 0.0005
+    },
+    "朱太川（黒松内）": {
+        "lat": 42.6683, "lon": 140.3061, "base_level": 0.70,
+        "stg_id": "3010312811050", "runoff_factor": 0.035, "decay_rate": 0.96, "drought_rate": 0.0005
+    }
 }
 
 # ---------------------------------------------------------
-# 3. 外部API取得モジュール（気象・水象データ）
+# 3. 外部API取得モジュール（気象 & 川の防災情報データ）
 # ---------------------------------------------------------
 @st.cache_data(ttl=3600)
 def fetch_weather_and_hydro(lat, lon):
@@ -47,13 +59,26 @@ def fetch_weather_and_hydro(lat, lon):
         df = pd.DataFrame(data["hourly"])
         df["time"] = pd.to_datetime(df["time"])
         return df
-    except Exception as e:
+    except Exception:
         return None
 
+@st.cache_data(ttl=900)
+def fetch_real_water_level(stg_id):
+    """川の防災情報JSON/API経由で最新の実測水位を取得"""
+    url = f"https://www.river.go.jp/kawabou/api/v1/waterlevel/latest?stationCode={stg_id}"
+    try:
+        res = requests.get(url, timeout=5)
+        if res.status_code == 200:
+            data = res.json()
+            return float(data.get("waterLevel", None))
+    except Exception:
+        pass
+    return None
+
 # ---------------------------------------------------------
-# 4. 水位推移シミュレーション（引き水保持・自然減水調整版）
+# 4. 水位推移シミュレーション
 # ---------------------------------------------------------
-def simulate_water_levels(df_weather, base_level, runoff_factor, decay_rate, drought_rate):
+def simulate_water_levels(df_weather, base_level, runoff_factor, decay_rate, drought_rate, real_level=None):
     levels = []
     current_runoff = 0.0
     dry_hours = 0
@@ -69,7 +94,6 @@ def simulate_water_levels(df_weather, base_level, runoff_factor, decay_rate, dro
         else:
             dry_hours += 1
             current_runoff = current_runoff * decay_rate
-            # 渇水ペナルティを非常にマイルド（実効値へ補正）に設定
             temp_penalty = max(1.0, temp / 22.0)
             drought_offset = min(0.20, dry_hours * drought_rate * temp_penalty)
             
@@ -77,15 +101,27 @@ def simulate_water_levels(df_weather, base_level, runoff_factor, decay_rate, dro
         levels.append(calculated_level)
         
     df_weather["simulated_level"] = levels
+    
+    # 実測値が得られている場合、最新の過去データ末尾を実測値に補正調整
+    if real_level is not None:
+        last_sim = df_weather["simulated_level"].iloc[-1]
+        offset = real_level - last_sim
+        df_weather["simulated_level"] = df_weather["simulated_level"] + offset
+
     return df_weather
 
 # ---------------------------------------------------------
 # 5. 解析・AI補正エンジン
 # ---------------------------------------------------------
 def analyze_condition(df_weather, river_info, user_logs, target_river, target_date):
+    # 実測水位の取得試行
+    real_level = fetch_real_water_level(river_info["stg_id"])
+
     if df_weather is None or df_weather.empty:
+        current_level = real_level if real_level is not None else river_info["base_level"]
         return {
-            "water_level": river_info["base_level"],
+            "water_level": current_level,
+            "level_is_real": real_level is not None,
             "level_trend": "平水（安定）",
             "days_since_flood": 4,
             "moss_growth": 50,
@@ -103,7 +139,8 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
         river_info["base_level"], 
         river_info["runoff_factor"], 
         river_info["decay_rate"],
-        river_info["drought_rate"]
+        river_info["drought_rate"],
+        real_level=real_level
     )
 
     target_datetime = datetime.datetime.combine(target_date, datetime.time(12, 0))
@@ -167,7 +204,7 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
         current_sim_level = target_df["simulated_level"].mean()
     else:
         hourly_water_temp = [15.0 + (i if i <= 14 else 28 - i) * 0.4 for i in range(24)]
-        current_sim_level = river_info["base_level"]
+        current_sim_level = real_level if real_level is not None else river_info["base_level"]
 
     # 水位トレンド判定
     level_diff = current_sim_level - river_info["base_level"]
@@ -223,6 +260,7 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
 
     return {
         "water_level": current_sim_level,
+        "level_is_real": real_level is not None,
         "level_trend": level_trend,
         "days_since_flood": days_since_flood,
         "moss_growth": moss_growth,
@@ -278,7 +316,8 @@ with col_alert2:
 
 # 主要指標
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("推測水位", f"{res['water_level']:.2f} m", res["level_trend"])
+label_water = "水文テレメータ実測" if res["level_is_real"] else "推測水位"
+col1.metric(f"水位 ({label_water})", f"{res['water_level']:.2f} m", res["level_trend"])
 col2.metric("全飛びからの経過", f"{res['days_since_flood']} 日")
 col3.metric("ハミ垢生育度", f"{res['moss_growth']} %")
 col4.metric("シーズンモード", res["season_mode"])
@@ -286,21 +325,21 @@ col4.metric("シーズンモード", res["season_mode"])
 st.write(f"**濁り・澄み具合予測**: {res['clarity_recovery']}")
 
 # ---------------------------------------------------------
-# 7. AI推測水位グラフ
+# 7. 水位グラフ（実測補正ベース）
 # ---------------------------------------------------------
 st.markdown("---")
-st.subheader("📊 AI推測水位グラフ（直近2日 ～ 釣行予定日）")
+st.subheader("📊 水位グラフ（直近2日 ～ 釣行予定日）")
 
 if not res["df_hydro"].empty:
     chart_hydro = res["df_hydro"][["time", "simulated_level", "base_level"]].copy()
     chart_hydro["時間"] = chart_hydro["time"].dt.strftime("%m/%d %H時")
     chart_hydro = chart_hydro.rename(columns={
-        "simulated_level": "推測水位(m)",
-        "base_level": "平常水位(m)"
+        "simulated_level": "水位(m)",
+        "base_level": "平常基準水位(m)"
     }).set_index("時間")
     
-    st.line_chart(chart_hydro[["推測水位(m)", "平常水位(m)"]])
-    st.caption("※ 青線: 降雨応答シミュレーション推測値 ／ 赤・別色線: 該当河川の平常基準水位")
+    st.line_chart(chart_hydro[["水位(m)", "平常基準水位(m)"]])
+    st.caption("※ 青線: 川の防災情報実測値＋降雨応答予測 ／ 赤・別色線: 該当河川の平常基準水位")
 
 # ---------------------------------------------------------
 # 8. 当日の時合・活性タイムライン
