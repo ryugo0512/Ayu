@@ -373,7 +373,6 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
         "max_wind": max_wind,
         "level_diff": level_diff
     }
-
 # ---------------------------------------------------------
 # 7. UI（メイン画面）
 # ---------------------------------------------------------
