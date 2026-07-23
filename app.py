@@ -56,7 +56,7 @@ RIVERS = {
         "temp_base": 12.0, "temp_factor": 0.40, "max_temp": 22.5
     },
     "朱太川（黒松内）": {
-        "lat": 42.6683, "lon": 140.3061, "base_level": 22.94, "default_actual": 22.94,
+        "lat": 42.6683, "lon": 140.3061, "base_level": 1.44, "default_actual": 1.44,
         "station_name": "朱太川実橋", "river_system": "朱太川水系 朱太川",
         "weather_url": "https://weathernews.jp/onebox/river/shubutogawa/?pid=0025700400387",
         "runoff_factor": 0.035, "decay_rate": 0.96, "drought_rate": 0.0005,
@@ -76,39 +76,35 @@ def fetch_weather_water_level(url, default_val):
         res = requests.get(url, headers=headers, timeout=5)
         res.raise_for_status()
         
-        # HTMLタグを除去してプレーンテキスト化
+        # タグ除去してテキスト化
         clean_text = re.sub(r'<[^>]+>', ' ', res.text)
         clean_text = ' '.join(clean_text.split())
 
-        # 1. 「現在水位 ◯.◯ m」パターン
-        match = re.search(r'現在水位\s*(\d+\.\d{2})\s*m?', clean_text)
+        # パターン1: 「現在水位 X.XX m」または「現在水位 X.XXm」
+        match = re.search(r'現在水位\s*(\d+\.\d{2})\s*m', clean_text)
         if match:
-            val = float(match.group(1))
-            if 0.0 <= val <= 100.0:
-                return val, "ウェザーニュース (自動取得)"
+            return float(match.group(1)), "ウェザーニュース (自動取得)"
 
-        # 2. 「時刻時点 ◯.◯m」パターン
-        match = re.search(r'\d{1,2}:\d{2}\s*時点\s*(\d+\.\d{2})\s*m?', clean_text)
+        # パターン2: 「XX:XX時点 X.XX m」
+        match = re.search(r'\d{1,2}:\d{2}\s*時点\s*(\d+\.\d{2})\s*m', clean_text)
         if match:
-            val = float(match.group(1))
-            if 0.0 <= val <= 100.0:
-                return val, "ウェザーニュース (自動取得)"
+            return float(match.group(1)), "ウェザーニュース (自動取得)"
 
-        # 3. 「時点 ◯.◯m」または「水位 ◯.◯m」
-        match = re.search(r'(?:時点|水位)[^\d]*?(\d+\.\d{2})\s*m', clean_text)
+        # パターン3: 「時点 X.XX m」
+        match = re.search(r'時点\s*(\d+\.\d{2})\s*m', clean_text)
         if match:
-            val = float(match.group(1))
-            if 0.0 <= val <= 100.0:
-                return val, "ウェザーニュース (自動取得)"
+            return float(match.group(1)), "ウェザーニュース (自動取得)"
 
-        # 4. 基準値に最も近い数値を探す（許容範囲5.0m以内）
-        matches = re.findall(r'(\d+\.\d{2})', clean_text)
+        # パターン4: 単純な「X.XX m」表記（基準値固定の誤抽出を避けるため厳格に処理）
+        matches = re.findall(r'(\d+\.\d{2})\s*m', clean_text)
         if matches:
-            valid_values = [float(m) for m in matches if 0.0 <= float(m) <= 100.0]
-            if valid_values:
-                closest_val = min(valid_values, key=lambda x: abs(x - default_val))
-                if abs(closest_val - default_val) <= 5.0:
-                    return closest_val, "ウェザーニュース (自動取得)"
+            for m_str in matches:
+                val = float(m_str)
+                # 基準値ぴったり（設定値の誤検出）を除外した上で実測値を採用
+                if abs(val - default_val) > 0.001 and abs(val - default_val) <= 3.0:
+                    return val, "ウェザーニュース (自動取得)"
+            # 変化がない場合は最初の数値を返す
+            return float(matches[0]), "ウェザーニュース (自動取得)"
 
         return default_val, "デフォルト値 (数値未検出または異常値)"
     except Exception:
