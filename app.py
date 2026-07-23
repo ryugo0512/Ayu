@@ -34,9 +34,9 @@ def delete_log(index):
         save_logs(logs)
 
 RIVERS = {
-    "尻別川本流（蘭越）": {
-        "lat": 42.8021, "lon": 140.5251, "base_level": 9.27, "default_actual": 9.27,
-        "station_name": "蘭越", "river_system": "尻別川水系 尻別川",
+    "尻別川本流（名駒）": {
+        "lat": 42.8021, "lon": 140.5251, "base_level": 1.81, "default_actual": 1.81,
+        "station_name": "名駒", "river_system": "尻別川水系 尻別川",
         "weather_url": "https://weathernews.jp/onebox/river/shiribetsugawa/?pid=2078700400005",
         "runoff_factor": 0.025, "decay_rate": 0.96, "drought_rate": 0.0005,
         "temp_base": 11.0, "temp_factor": 0.35, "max_temp": 21.5
@@ -287,7 +287,8 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
 
     level_diff = display_water_level - effective_base
     
-    if level_diff < 0.0:
+    # 変更：通常水位より -10cm (-0.10m) 未満で渇水傾向とする
+    if level_diff < -0.10:
         level_trend = f"📉 渇水傾向 ({level_diff*100:+.0f}cm)"
     elif level_diff <= 0.15:
         level_trend = f"✨ 平水〜好条件 ({level_diff*100:+.0f}cm)"
