@@ -35,7 +35,7 @@ def delete_log(index):
         save_logs(logs)
 
 # ---------------------------------------------------------
-# 2. 河川・観測所データ設定（水温補正パラメータ追加）
+# 2. 河川・観測所データ設定（高精度パラメータ追加）
 # ---------------------------------------------------------
 RIVERS = {
     "尻別川本流（蘭越）": {
@@ -61,11 +61,11 @@ RIVERS = {
 }
 
 # ---------------------------------------------------------
-# 3. 外部API取得モジュール & 天気コード変換
+# 3. 外部API取得モジュール & 天気コード変換（風速・日射量追加）
 # ---------------------------------------------------------
 @st.cache_data(ttl=3600)
 def fetch_weather_and_hydro(lat, lon):
-    url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=temperature_2m,precipitation,weathercode,sunshine_duration,shortwave_radiation&past_days=14&forecast_days=7&timezone=Asia%2FTokyo"
+    url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=temperature_2m,precipitation,weathercode,sunshine_duration,shortwave_radiation,windspeed_10m&past_days=14&forecast_days=7&timezone=Asia%2FTokyo"
     try:
         res = requests.get(url, timeout=10)
         data = res.json()
@@ -104,20 +104,29 @@ def get_weather_desc(code):
         return "☁️ 曇り"
 
 # ---------------------------------------------------------
-# 4. 水位推移シミュレーション
+# 4. 水位推移シミュレーション（実効雨量・土壌保持モデル導入）
 # ---------------------------------------------------------
 def simulate_water_levels(df_weather, base_level, runoff_factor, decay_rate, drought_rate, real_level=None):
     levels = []
     current_runoff = 0.0
+    effective_rain = 0.0
     dry_hours = 0
     
+    # 実効雨量の減衰率（48時間で約半減）
+    eff_decay = np.exp(-np.log(2) / 48.0)
+
     for idx, row in df_weather.iterrows():
         rain = row["precipitation"]
         temp = row["temperature_2m"]
         
+        # 実効雨量（土壌蓄積量）の更新
+        effective_rain = effective_rain * eff_decay + rain
+        
         if rain > 0.2:
             dry_hours = 0
-            current_runoff = current_runoff * decay_rate + (rain * runoff_factor)
+            # 流出量に実効雨量の加重（山からのしみ出しを反映）
+            soil_contribution = effective_rain * 0.0015
+            current_runoff = current_runoff * decay_rate + (rain * runoff_factor) + soil_contribution
             drought_offset = 0.0
         else:
             dry_hours += 1
@@ -138,7 +147,7 @@ def simulate_water_levels(df_weather, base_level, runoff_factor, decay_rate, dro
     return df_weather
 
 # ---------------------------------------------------------
-# 5. 解析・AI補正エンジン
+# 5. 解析・AI補正エンジン（日照・季節水温ベース・風速対応）
 # ---------------------------------------------------------
 def analyze_condition(df_weather, river_info, user_logs, target_river, target_date):
     real_level = fetch_real_water_level(river_info["stg_id"])
@@ -162,7 +171,8 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
             "temp_max": 20.0,
             "temp_min": 15.0,
             "water_temp_max": 18.0,
-            "water_temp_avg": 16.5
+            "water_temp_avg": 16.5,
+            "max_wind": 2.0
         }
 
     df_weather = simulate_water_levels(
@@ -182,7 +192,12 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
         feedbacks = [l.get("moss_feedback", 0) for l in river_logs]
         bias_growth = np.mean(feedbacks) * 0.1
 
-    raw_water_temp = river_info["temp_base"] + (df_weather["temperature_2m"] * river_info["temp_factor"])
+    # 季節（月日）に応じた基礎水温の自動補正数式（8月中旬がピーク）
+    day_of_year = target_date.timetuple().tm_yday
+    seasonal_temp_offset = 2.0 * np.sin(2 * np.pi * (day_of_year - 170) / 365)
+    adjusted_temp_base = river_info["temp_base"] + seasonal_temp_offset
+
+    raw_water_temp = adjusted_temp_base + (df_weather["temperature_2m"] * river_info["temp_factor"])
     df_weather["estimated_water_temp"] = np.minimum(raw_water_temp, river_info["max_temp"])
 
     df_past = df_weather[df_weather["time"] <= target_datetime].copy()
@@ -207,6 +222,7 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
         clarity_recovery = "清澄（良好）"
         clarity_score = 3
 
+    # シーズンモード判定と日照量（光合成スピード）によるハミ垢生成の補正
     m, d = target_date.month, target_date.day
     if m == 7 and d <= 15:
         season_mode = "初期（低水温・緩速成長）"
@@ -221,8 +237,13 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
         season_mode = "終盤・落ち鮎（再生遅延）"
         growth_rate = 7.0
 
-    moss_growth = min(100, int((days_since_flood * growth_rate) * (1.0 + bias_growth)))
+    # 全飛び以降の平均日射量（W/m²）を反映
+    recent_radiation = df_past.tail(max(24, days_since_flood * 24))["shortwave_radiation"].mean() if not df_past.empty else 150.0
+    radiation_factor = max(0.7, min(1.3, recent_radiation / 180.0))
 
+    moss_growth = min(100, int((days_since_flood * growth_rate * radiation_factor) * (1.0 + bias_growth)))
+
+    # 対象日の気象・水温・風速計算
     target_df = df_weather[df_weather["time"].dt.date == target_date]
     if not target_df.empty and len(target_df) >= 24:
         hourly_water_temp = target_df["estimated_water_temp"].tolist()[:24]
@@ -234,12 +255,14 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
         temp_min = target_df["temperature_2m"].min()
         water_temp_max = max(hourly_water_temp)
         water_temp_avg = float(np.mean(hourly_water_temp))
+        max_wind = target_df["windspeed_10m"].max() if "windspeed_10m" in target_df.columns else 0.0
     else:
         hourly_water_temp = [14.0 + (i if i <= 14 else 28 - i) * 0.3 for i in range(24)]
         current_sim_level = real_level if real_level is not None else river_info["base_level"]
         weather_desc = "☀️ 晴れ"
         temp_max, temp_min = 22.0, 16.0
         water_temp_max, water_temp_avg = 17.5, 15.8
+        max_wind = 2.0
 
     level_diff = current_sim_level - river_info["base_level"]
     if level_diff < -0.08:
@@ -283,7 +306,6 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
 
     score = max(1, min(raw_score, max_cap))
 
-    # 全データの保持（描画側で期間を動的抽出）
     df_hydro = df_weather.copy()
     df_hydro["base_level"] = river_info["base_level"]
 
@@ -304,7 +326,8 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
         "temp_max": temp_max,
         "temp_min": temp_min,
         "water_temp_max": water_temp_max,
-        "water_temp_avg": water_temp_avg
+        "water_temp_avg": water_temp_avg,
+        "max_wind": max_wind
     }
 
 # ---------------------------------------------------------
@@ -335,7 +358,7 @@ else:
 stars = "★" * res["score"] + "☆" * (10 - res["score"])
 st.markdown(f"### 🎯 釣行日おすすめ度 : {stars} （**{res['score']}** / 10）")
 
-# 警報・アラート表示
+# 警報・アラート表示（風速注意追加）
 col_alert1, col_alert2 = st.columns(2)
 with col_alert1:
     st.info(f"**全飛びリスク判定**: {res['flood_risk']}")
@@ -345,14 +368,18 @@ with col_alert2:
     else:
         st.success(f"**コンディション**: {res['moss_alert']}")
 
-# 主要指標（水位・天気・気温・水温・ハミ垢）
-col1, col2, col3, col4, col5 = st.columns(5)
+if res["max_wind"] >= 6.0:
+    st.error(f"💨 **強風注意**: 予想最大風速 {res['max_wind']:.1f} m/s （長尺竿の操作・保持にご注意ください）")
+
+# 主要指標（水位・天気・気温・水温・ハミ垢・最大風速）
+col1, col2, col3, col4, col5, col6 = st.columns(6)
 label_water = "実測" if res["level_is_real"] else "推測"
 col1.metric(f"水位 ({label_water})", f"{res['water_level']:.2f} m", res["level_trend"])
 col2.metric("天気", res["weather_desc"])
 col3.metric("予想気温", f"{res['temp_max']:.1f}℃", f"最低 {res['temp_min']:.1f}℃")
 col4.metric("推計水温", f"{res['water_temp_max']:.1f}℃", f"平均 {res['water_temp_avg']:.1f}℃")
 col5.metric("ハミ垢生育度", f"{res['moss_growth']} %")
+col6.metric("最大風速", f"{res['max_wind']:.1f} m/s")
 
 st.write(f"**濁り・澄み具合予測**: {res['clarity_recovery']}")
 st.caption(f"※ 垢育成シーズンモード: **{res['season_mode']}** ／ 全飛びからの経過日数: **{res['days_since_flood']}日**")
@@ -370,7 +397,6 @@ graph_range = st.radio(
 )
 
 if not res["df_hydro"].empty:
-    # 表示開始期間の動的設定
     past_days = 7 if graph_range == "直近1週間 + 予測" else 2
     start_time = pd.to_datetime(datetime.date.today() - datetime.timedelta(days=past_days))
     end_time = pd.to_datetime(target_date + datetime.timedelta(days=1))
