@@ -72,12 +72,12 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
             "water_level": river_info["base_level"],
             "level_trend": "平水（安定）",
             "days_since_flood": 4,
-            "moss_growth": 60,
+            "moss_growth": 50,
             "moss_alert": "✅ 新垢形成中（良好）",
             "flood_risk": "🟢 安定：増水リスク低",
             "clarity_recovery": "清澄（良好）",
             "season_mode": "盛期",
-            "score": 7,
+            "score": 5,
             "hourly_water_temp": [16 + i*0.5 for i in range(24)],
             "df_hydro": pd.DataFrame()
         }
@@ -125,20 +125,20 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
         clarity_recovery = "清澄（良好）"
         clarity_score = 3
 
-    # シーズンモード判定（細分化）
+    # シーズンモード判定（成長スピードを実効値に合わせて再調整）
     m, d = target_date.month, target_date.day
     if m == 7 and d <= 15:
         season_mode = "初期（低水温・緩速成長）"
-        growth_rate = 11.0
+        growth_rate = 9.0
     elif (m == 7 and d > 15) or (m == 8 and d <= 15):
-        season_mode = "盛期（高水温・超高活性）"
-        growth_rate = 15.0
+        season_mode = "盛期（高水温・高活性）"
+        growth_rate = 12.5
     elif m == 8 and d > 15:
         season_mode = "晩夏・成熟期"
-        growth_rate = 12.0
+        growth_rate = 10.0
     else:
         season_mode = "終盤・落ち鮎（再生遅延）"
-        growth_rate = 8.0
+        growth_rate = 7.0
 
     # ハミ垢生育度
     moss_growth = min(100, int((days_since_flood * growth_rate) * (1.0 + bias_growth)))
@@ -146,10 +146,12 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
     # コンディション判定
     if days_since_flood <= 1 or moss_growth < 20:
         moss_alert = "🚫 全飛び直後（垢ナシ・石白っぽい）"
+    elif days_since_flood <= 4 or moss_growth < 60:
+        moss_alert = "🟡 垢付き始め（まだ薄く喰い浅い）"
     elif days_since_flood > 12 and target_24h_rain < 5.0:
         moss_alert = "⚠️ 垢腐り・泥垢注意（高水温・長期間渇水）"
     else:
-        moss_alert = "✅ 新垢形成中（良好）"
+        moss_alert = "✅ 新垢形成完了（良好）"
 
     # 全飛び警戒アラート
     df_future = df_weather[df_weather["time"] >= target_datetime].head(24)
@@ -170,14 +172,26 @@ def analyze_condition(df_weather, river_info, user_logs, target_river, target_da
         hourly_water_temp = [15.0 + (i if i <= 14 else 28 - i) * 0.4 for i in range(24)]
         current_sim_level = river_info["base_level"]
 
-    # 10段階スコア計算
-    moss_pts = min(4, int(moss_growth / 25))
-    water_pts = clarity_score
+    # 10段階スコア計算（全飛び日数による厳密な上限設定）
     temp_peak_hours = len([t for t in hourly_water_temp if t >= 17.0])
     temp_pts = 3 if temp_peak_hours >= 4 else (2 if temp_peak_hours >= 2 else 1)
-    score = max(1, min(10, moss_pts + water_pts + temp_pts))
+    
+    # 基本算定
+    raw_score = int((moss_growth / 100) * 4) + clarity_score + temp_pts
 
-    # 水位推移用データフレーム（平常水位列を保持）
+    # 経過日数による強度のスコア上限（キャップ）処理
+    if days_since_flood <= 2:
+        max_cap = 3
+    elif days_since_flood <= 4:
+        max_cap = 5  # 4日目は最大5点まで
+    elif days_since_flood <= 6:
+        max_cap = 7  # 6日目までは最大7点まで
+    else:
+        max_cap = 10 # 7日以上経過で10点解禁
+
+    score = max(1, min(raw_score, max_cap))
+
+    # 水位推移用データフレーム
     start_time = pd.to_datetime(datetime.date.today() - datetime.timedelta(days=2))
     end_time = pd.to_datetime(target_date + datetime.timedelta(days=1))
     df_hydro = df_weather[(df_weather["time"] >= start_time) & (df_weather["time"] < end_time)].copy()
@@ -233,7 +247,7 @@ col_alert1, col_alert2 = st.columns(2)
 with col_alert1:
     st.info(f"**全飛びリスク判定**: {res['flood_risk']}")
 with col_alert2:
-    if "⚠️" in res["moss_alert"] or "🚫" in res["moss_alert"]:
+    if "⚠️" in res["moss_alert"] or "🚫" in res["moss_alert"] or "🟡" in res["moss_alert"]:
         st.warning(f"**コンディション**: {res['moss_alert']}")
     else:
         st.success(f"**コンディション**: {res['moss_alert']}")
@@ -248,7 +262,7 @@ col4.metric("シーズンモード", res["season_mode"])
 st.write(f"**濁り・澄み具合予測**: {res['clarity_recovery']}")
 
 # ---------------------------------------------------------
-# 7. AI推測水位グラフ（平常水位線を追加）
+# 7. AI推測水位グラフ
 # ---------------------------------------------------------
 st.markdown("---")
 st.subheader("📊 AI推測水位グラフ（直近2日 ～ 釣行予定日）")
