@@ -6,7 +6,6 @@ import json
 import os
 import requests
 import altair as alt
-from bs4 import BeautifulSoup
 
 # ---------------------------------------------------------
 # 1. 基本設定とデータ永続化（実釣ログ保存・削除）
@@ -73,7 +72,7 @@ RIVERS = {
 }
 
 # ---------------------------------------------------------
-# 3. 外部データ取得モジュール（天気予報 ＆ リアルタイム水位自動取得）
+# 3. 外部データ取得モジュール（天気予報）
 # ---------------------------------------------------------
 @st.cache_data(ttl=3600)
 def fetch_weather_data(lat, lon):
@@ -86,27 +85,6 @@ def fetch_weather_data(lat, lon):
         return df
     except Exception:
         return None
-
-def fetch_realtime_water_level(river_name, river_info):
-    """
-    国土交通省の川の防災情報ページ等からリアルタイム水位の取得を試みる。
-    取得できない場合は安全のため平水基準値(base_level)を返す。
-    """
-    try:
-        # 国交省川の防災情報のモバイルトップ等をスクレイピング対象として安全にパース
-        url = "https://www.river.go.jp/kawabou/mb/m?zm=11&clat=42.0&clon=140.5&fld=0"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-        res = requests.get(url, headers=headers, timeout=5)
-        if res.status_code == 200:
-            soup = BeautifulSoup(res.text, 'html.parser')
-            # 実際の観測値テキストから合致するものを探す拡張ロジック
-            # （構造変化に備え、取得失敗時は即座にベースレベルへフォールバック）
-            pass
-    except Exception:
-        pass
-    
-    # 安定動作のため、基本はベース平水値を軸にしつつ天候シミュレーションを連動
-    return river_info["base_level"]
 
 def get_weather_desc(code):
     if code in [0]:
@@ -162,15 +140,11 @@ def simulate_water_levels(df_weather, base_level, runoff_factor, decay_rate, dro
 # 5. 解析・AI補正エンジン
 # ---------------------------------------------------------
 def analyze_condition(df_weather, river_info, user_logs, target_river, target_date):
-    # 各河川固有の正確な平水基準値を取得
     effective_base = river_info["base_level"]
-    
-    # リアルタイム水位の自動取得を試みる
-    real_time_level = fetch_realtime_water_level(target_river, river_info)
 
     if df_weather is None or df_weather.empty:
         return {
-            "water_level": real_time_level,
+            "water_level": effective_base,
             "level_trend": "平水（安定）",
             "days_since_flood": 4,
             "moss_growth": 50,
@@ -361,7 +335,7 @@ with col_sel2:
 
 river_info = RIVERS[target_river]
 
-st.caption(sprintf_info := f"📍 観測所: {river_info['station_name']}（{river_info['river_system']}） ／ 平水基準水位: {river_info['base_level']:.2f}m")
+st.caption(f"📍 観測所: {river_info['station_name']}（{river_info['river_system']}） ／ 平水基準水位: {river_info['base_level']:.2f}m")
 
 df_weather = fetch_weather_data(river_info["lat"], river_info["lon"])
 user_logs = load_logs()
