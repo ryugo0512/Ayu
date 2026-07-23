@@ -7,7 +7,7 @@ import os
 import requests
 
 # ---------------------------------------------------------
-# 1. 基本設定とデータ永続化（実釣ログ保存）
+# 1. 基本設定とデータ永続化（実釣ログ保存・削除）
 # ---------------------------------------------------------
 st.set_page_config(page_title="北海道 鮎コンディション判定", page_icon="🐟", layout="wide")
 
@@ -19,11 +19,20 @@ def load_logs():
             return json.load(f)
     return []
 
+def save_logs(logs):
+    with open(LOG_FILE, "w", encoding="utf-8") as f:
+        json.dump(logs, f, ensure_ascii=False, indent=2)
+
 def save_log(log_entry):
     logs = load_logs()
     logs.append(log_entry)
-    with open(LOG_FILE, "w", encoding="utf-8") as f:
-        json.dump(logs, f, ensure_ascii=False, indent=2)
+    save_logs(logs)
+
+def delete_log(index):
+    logs = load_logs()
+    if 0 <= index < len(logs):
+        logs.pop(index)
+        save_logs(logs)
 
 # ---------------------------------------------------------
 # 2. 河川・観測所データ設定
@@ -75,7 +84,7 @@ def fetch_real_water_level(stg_id):
     return None
 
 # ---------------------------------------------------------
-# 4. 水位推移シミュレーション（過去＝実測ベース、未来＝天気予報AI予測）
+# 4. 水位推移シミュレーション
 # ---------------------------------------------------------
 def simulate_water_levels(df_weather, base_level, runoff_factor, decay_rate, drought_rate, real_level=None):
     levels = []
@@ -313,7 +322,6 @@ st.subheader("📊 水位グラフ（直近実績 ＆ 天気予報AI予測）")
 if not res["df_hydro"].empty:
     chart_hydro = res["df_hydro"][["time", "simulated_level", "base_level"]].copy()
     
-    # 現在時刻を境界として過去と未来に分離
     now_ts = pd.Timestamp.now()
     
     chart_hydro["過去実績水位(m)"] = np.where(chart_hydro["time"] <= now_ts, chart_hydro["simulated_level"], np.nan)
@@ -323,7 +331,6 @@ if not res["df_hydro"].empty:
     chart_hydro = chart_hydro.rename(columns={"base_level": "平常基準水位(m)"})
     chart_hydro = chart_hydro.set_index("時間")
     
-    # グラフ描画（過去実績、天気予報AI予測、平常基準水位でそれぞれ色分け）
     st.line_chart(chart_hydro[["過去実績水位(m)", "天気予報AI予測水位(m)", "平常基準水位(m)"]])
     st.caption("※ 過去実績：国交省実測値ベース ／ 天気予報AI予測：最新の気象予報（雨量・気温）を基にしたAIシミュレーション値 ／ 平常基準水位：河川の基準線")
 
@@ -351,7 +358,7 @@ else:
     st.info("💡 **おすすめ時合**: 全体的に水温が低めです。日照が強まる **12:00 ～ 14:30** が集中ポイントとなります。")
 
 # ---------------------------------------------------------
-# 9. 実釣ログ入力
+# 9. 実釣ログ入力 & 削除管理機能
 # ---------------------------------------------------------
 st.markdown("---")
 st.subheader("📝 実釣ログの記録（学習用）")
@@ -378,7 +385,17 @@ with st.form("log_form"):
         }
         save_log(log_entry)
         st.success("実釣ログを保存しました！次回以降の予測精度に自動反映されます。")
+        st.rerun()
 
 if user_logs:
-    with st.expander("📂 これまでの実釣ログを確認"):
-        st.dataframe(pd.DataFrame(user_logs))
+    with st.expander("📂 これまでの実釣ログを確認・削除"):
+        for idx, log in enumerate(user_logs):
+            c1, c2, c3, c4, c5 = st.columns([2, 3, 2, 3, 2])
+            c1.write(f"📅 {log.get('date')}")
+            c2.write(f"🌊 {log.get('river')}")
+            c3.write(f"🐟 {log.get('catch')} 匹")
+            c4.write(f"🪨 {log.get('moss_condition')}")
+            if c5.button("削除", key=f"del_{idx}"):
+                delete_log(idx)
+                st.success("ログを削除しました。")
+                st.rerun()
