@@ -1,6 +1,8 @@
 import datetime
 import json
 import os
+import re
+import time
 import altair as alt
 import numpy as np
 import pandas as pd
@@ -104,7 +106,6 @@ def estimate_water_temp_bias(river_name, river_info):
       day_of_year = l_date.timetuple().tm_yday
       seasonal_temp_offset = 2.0 * np.sin(2 * np.pi * (day_of_year - 170) / 365)
       calc_base = river_info["temp_base"] + seasonal_temp_offset
-      # 気温を20度と仮定した際の標準推計値との差分を学習
       default_est = calc_base + (20.0 * river_info["temp_factor"])
       measured = l["measured_water_temp"]
       diff = measured - default_est
@@ -358,11 +359,9 @@ def analyze_condition(
   effective_base = river_info["base_level"]
   default_decay = river_info.get("decay_rate", 0.9975)
 
-  # 動的学習された減衰率を適用
   river_decay_rate = estimate_dynamic_decay_rate(
       target_river, effective_base, default_decay
   )
-  # 実測水温ログからAIが学習したバイアス（補正値）を取得
   temp_bias = estimate_water_temp_bias(target_river, river_info)
 
   df_weather = simulate_water_levels(
@@ -386,7 +385,6 @@ def analyze_condition(
       if "temperature_2m" in df_weather.columns
       else df_weather.columns[1]
   )
-  # AI学習された水温バイアスを反映
   raw_water_temp = (
       adjusted_temp_base
       + (df_weather[temp_col] * river_info["temp_factor"])
