@@ -311,19 +311,20 @@ def simulate_water_levels(
   time_diffs = (df_weather["time"] - now).abs()
   now_idx = int(time_diffs.idxmin())
 
-  simulated_levels = np.zeros(len(df_weather))
+  simulated_levels = np.full(len(df_weather), np.nan)
 
-  for i in range(len(df_weather)):
-    t_str = df_weather.loc[i, "time"].strftime("%Y-%m-%d %H:00")
-    t = df_weather.loc[i, "time"]
-    if t <= now:
-      if t_str in history:
-        simulated_levels[i] = history[t_str]
-      else:
-        simulated_levels[i] = current_actual if i == now_idx else base_level
-
+  # 現在値セット
   simulated_levels[now_idx] = current_actual
 
+  # 過去方向は実績（履歴）のみ。シミュレーションは行わない。
+  for i in range(now_idx - 1, -1, -1):
+    t_str = df_weather.loc[i, "time"].strftime("%Y-%m-%d %H:00")
+    if t_str in history:
+      simulated_levels[i] = history[t_str]
+    else:
+      simulated_levels[i] = np.nan
+
+  # 未来方向のシミュレーション
   curr_lvl = current_actual
   eff_decay = np.exp(-np.log(2) / 48.0)
   runoff_factor = 0.035
@@ -772,13 +773,20 @@ if not res["df_hydro"].empty and "time" in res["df_hydro"].columns:
       & (res["df_hydro"]["time"] < end_time)
   ].copy()
 
-  if not chart_hydro.empty:
-    chart_hydro["シミュレーション水位(m)"] = chart_hydro["simulated_level"]
+  # 過去部分に実績データ（履歴）が存在するかチェック
+  now_ts = pd.Timestamp.now().floor("h")
+  past_data_subset = chart_hydro[chart_hydro["time"] <= now_ts]
+  has_past_actual = past_data_subset["simulated_level"].notna().any()
+
+  if not has_past_actual and not chart_hydro.empty:
+    st.info("過去の計測実績データがないため、グラフは表示されません。")
+  elif not chart_hydro.empty:
+    chart_hydro["水位(実績・予測)(m)"] = chart_hydro["simulated_level"]
     chart_hydro["時間"] = chart_hydro["time"].dt.strftime("%m/%d %H時")
     chart_hydro = chart_hydro.rename(columns={"base_level": "基準水位線(m)"})
     chart_hydro = chart_hydro.set_index("時間")
 
-    st.line_chart(chart_hydro[["シミュレーション水位(m)", "基準水位線(m)"]])
+    st.line_chart(chart_hydro[["水位(実績・予測)(m)", "基準水位線(m)"]])
   else:
     st.info("指定期間のグラフデータがありません。")
 
@@ -789,7 +797,6 @@ temp_data = res["hourly_water_temp"]
 hours = [f"{i:02d}:00" for i in range(24)]
 
 
-# 5段階評価の判定関数
 def get_water_temp_status(t):
   if t < 16.0:
     return "① 低水温（〜15.9℃）"
@@ -846,7 +853,6 @@ chart_points = (
 chart_temp = (chart_line + chart_points).properties(height=300)
 st.altair_chart(chart_temp, use_container_width=True)
 
-# 各段階ごとの時間帯集計表示
 status_summary = {}
 for h, t, s in zip(hours, temp_data, statuses):
   if s not in status_summary:
@@ -863,8 +869,12 @@ for s in [
   if s in status_summary and status_summary[s]:
     hrs = status_summary[s]
     start_h, end_h = min(hrs), max(hrs)
-    time_str = f"{start_h:02d}:00 ～ {(end_h+1)%24:02d}:00" if start_h != end_h else f"{start_h:02d}:00"
-    
+    time_str = (
+        f"{start_h:02d}:00 ～ {(end_h+1)%24:02d}:00"
+        if start_h != end_h
+        else f"{start_h:02d}:00"
+    )
+
     if "①" in s:
       st.info(f"{s}: {time_str}")
     elif "②" in s:
