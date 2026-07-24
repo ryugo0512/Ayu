@@ -899,13 +899,25 @@ with st.form("log_form"):
         )
 
     catch_count = st.number_input("釣果（匹）", min_value=0, max_value=200, value=10)
-    measured_water_temp = st.number_input(
-        "実際の水温（℃）※現場の実測値",
-        min_value=0.0,
-        max_value=35.0,
-        value=16.0,
-        step=0.1,
-    )
+
+    st.markdown("---")
+    st.markdown("##### 🌡️ 現地水温データ（実測）")
+    col_temp1, col_temp2 = st.columns(2)
+    with col_temp1:
+        measured_water_temp = st.number_input(
+            "実際の水温（℃）",
+            min_value=0.0,
+            max_value=35.0,
+            value=16.0,
+            step=0.1,
+        )
+    with col_temp2:
+        measured_water_temp_time = st.time_input(
+            "水温を測った時間",
+            value=datetime.time(12, 0),
+        )
+
+    st.markdown("---")
     moss_condition = st.select_slider(
         "実際のハミ垢の状況",
         options=[
@@ -931,6 +943,7 @@ with st.form("log_form"):
             "river": selected_log_river,
             "catch": catch_count,
             "measured_water_temp": measured_water_temp,
+            "water_temp_time": measured_water_temp_time.strftime("%H:%M"),
             "moss_condition": moss_condition,
             "moss_feedback": feedback_map[moss_condition],
         }
@@ -941,14 +954,16 @@ with st.form("log_form"):
 if user_logs:
     with st.expander("下記の実釣ログを確認・削除"):
         for idx, log in enumerate(user_logs):
-            c1, c2, c3, c4, c5, c6 = st.columns([2, 3, 2, 2, 3, 2])
+            c1, c2, c3, c4, c5, c6, c7 = st.columns([2, 3, 2, 2, 2, 3, 1])
             c1.write(f"{log.get('date')}")
             c2.write(f"{log.get('river', '未設定')}")
             c3.write(f"{log.get('catch')} 匹")
             temp_val = log.get("measured_water_temp")
-            c4.write(f"{temp_val}℃" if temp_val else "-")
-            c5.write(f"{log.get('moss_condition')}")
-            if c6.button("削除", key=f"del_{idx}"):
+            temp_time = log.get("water_temp_time", "-")
+            c4.write(f"{temp_val}℃" if temp_val is not None else "-")
+            c5.write(f"{temp_time}")
+            c6.write(f"{log.get('moss_condition')}")
+            if c7.button("削除", key=f"del_{idx}"):
                 delete_log(idx)
                 st.success("ログを削除しました。")
                 st.rerun()
