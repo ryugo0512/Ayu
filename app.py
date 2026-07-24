@@ -14,6 +14,7 @@ st.set_page_config(
 )
 
 LOG_FILE = "fishing_logs.json"
+WATER_TEMP_LOG_FILE = "water_temp_logs.json"
 WATER_LOG_FILE = "water_levels_history.json"
 
 
@@ -40,6 +41,31 @@ def delete_log(index):
     if 0 <= index < len(logs):
         logs.pop(index)
         save_logs(logs)
+
+
+def load_water_temp_logs():
+    if os.path.exists(WATER_TEMP_LOG_FILE):
+        with open(WATER_TEMP_LOG_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return []
+
+
+def save_water_temp_logs(logs):
+    with open(WATER_TEMP_LOG_FILE, "w", encoding="utf-8") as f:
+        json.dump(logs, f, ensure_ascii=False, indent=2)
+
+
+def save_water_temp_log(log_entry):
+    logs = load_water_temp_logs()
+    logs.append(log_entry)
+    save_water_temp_logs(logs)
+
+
+def delete_water_temp_log(index):
+    logs = load_water_temp_logs()
+    if 0 <= index < len(logs):
+        logs.pop(index)
+        save_water_temp_logs(logs)
 
 
 def load_water_history():
@@ -91,9 +117,9 @@ def estimate_dynamic_decay_rate(river_name, base_level, default_decay):
 
 
 def estimate_water_temp_bias(river_name, river_info):
-    logs = load_logs()
+    temp_logs = load_water_temp_logs()
     river_logs = [
-        l for l in logs if l.get("river") == river_name and "measured_water_temp" in l
+        l for l in temp_logs if l.get("river") == river_name and "measured_water_temp" in l
     ]
     if not river_logs:
         return 0.0
@@ -883,27 +909,27 @@ for s in [
             st.error(f"{s}: {time_str}")
 
 st.markdown("---")
-st.subheader("実釣ログの記録（AI学習用）")
 
-with st.form("log_form"):
-    col_log1, col_log2 = st.columns(2)
-    with col_log1:
-        log_date = st.date_input("釣行日", today_date)
-    with col_log2:
+# ==========================================
+# 1. 現地水温データの単体記録セクション
+# ==========================================
+st.subheader("🌡️ 現地水温データの記録（1時間ごと等・単体保存）")
+
+with st.form("water_temp_form"):
+    col_wt1, col_wt2 = st.columns(2)
+    with col_wt1:
+        wt_date = st.date_input("測定日", today_date, key="wt_date")
+    with col_wt2:
         river_keys = list(RIVERS.keys())
         default_index = (
             river_keys.index(target_river) if target_river in river_keys else 0
         )
-        selected_log_river = st.selectbox(
-            "釣行河川", river_keys, index=default_index
+        selected_wt_river = st.selectbox(
+            "測定河川", river_keys, index=default_index, key="wt_river"
         )
 
-    catch_count = st.number_input("釣果（匹）", min_value=0, max_value=200, value=10)
-
-    st.markdown("---")
-    st.markdown("##### 🌡️ 現地水温データ（実測）")
-    col_temp1, col_temp2 = st.columns(2)
-    with col_temp1:
+    col_wt3, col_wt4 = st.columns(2)
+    with col_wt3:
         measured_water_temp = st.number_input(
             "実際の水温（℃）",
             min_value=0.0,
@@ -911,11 +937,59 @@ with st.form("log_form"):
             value=16.0,
             step=0.1,
         )
-    with col_temp2:
+    with col_wt4:
         measured_water_temp_time = st.time_input(
             "水温を測った時間",
-            value=datetime.time(12, 0),
+            value=datetime.datetime.now().time().replace(minute=0, second=0, microsecond=0),
         )
+
+    submitted_wt = st.form_submit_button("水温データを保存する")
+    if submitted_wt:
+        wt_entry = {
+            "date": str(wt_date),
+            "river": selected_wt_river,
+            "measured_water_temp": measured_water_temp,
+            "water_temp_time": measured_water_temp_time.strftime("%H:%M"),
+        }
+        save_water_temp_log(wt_entry)
+        st.success("水温データを保存しました！（AIの水温バイアス学習に反映）")
+        st.rerun()
+
+water_temp_logs = load_water_temp_logs()
+if water_temp_logs:
+    with st.expander("保存された水温データの確認・削除"):
+        for idx, log in enumerate(water_temp_logs):
+            c1, c2, c3, c4, c5 = st.columns([2, 3, 2, 2, 1])
+            c1.write(f"{log.get('date')}")
+            c2.write(f"{log.get('river', '未設定')}")
+            c3.write(f"{log.get('measured_water_temp')}℃")
+            c4.write(f"{log.get('water_temp_time', '-')}")
+            if c5.button("削除", key=f"del_wt_{idx}"):
+                delete_water_temp_log(idx)
+                st.success("水温データを削除しました。")
+                st.rerun()
+
+st.markdown("---")
+
+# ==========================================
+# 2. 実釣ログの記録セクション（釣果・ハミ垢のみ）
+# ==========================================
+st.subheader("🎣 実釣ログの記録（釣果・ハミ垢・AI学習用）")
+
+with st.form("log_form"):
+    col_log1, col_log2 = st.columns(2)
+    with col_log1:
+        log_date = st.date_input("釣行日", today_date, key="log_date")
+    with col_log2:
+        river_keys = list(RIVERS.keys())
+        default_index = (
+            river_keys.index(target_river) if target_river in river_keys else 0
+        )
+        selected_log_river = st.selectbox(
+            "釣行河川", river_keys, index=default_index, key="log_river"
+        )
+
+    catch_count = st.number_input("釣果（匹）", min_value=0, max_value=200, value=10)
 
     st.markdown("---")
     moss_condition = st.select_slider(
@@ -942,28 +1016,22 @@ with st.form("log_form"):
             "date": str(log_date),
             "river": selected_log_river,
             "catch": catch_count,
-            "measured_water_temp": measured_water_temp,
-            "water_temp_time": measured_water_temp_time.strftime("%H:%M"),
             "moss_condition": moss_condition,
             "moss_feedback": feedback_map[moss_condition],
         }
         save_log(log_entry)
-        st.success("実釣ログを保存しました！（水温・垢状態のAI学習に反映）")
+        st.success("実釣ログを保存しました！（垢状態のAI学習に反映）")
         st.rerun()
 
 if user_logs:
     with st.expander("下記の実釣ログを確認・削除"):
         for idx, log in enumerate(user_logs):
-            c1, c2, c3, c4, c5, c6, c7 = st.columns([2, 3, 2, 2, 2, 3, 1])
+            c1, c2, c3, c4, c5 = st.columns([2, 3, 2, 3, 1])
             c1.write(f"{log.get('date')}")
             c2.write(f"{log.get('river', '未設定')}")
             c3.write(f"{log.get('catch')} 匹")
-            temp_val = log.get("measured_water_temp")
-            temp_time = log.get("water_temp_time", "-")
-            c4.write(f"{temp_val}℃" if temp_val is not None else "-")
-            c5.write(f"{temp_time}")
-            c6.write(f"{log.get('moss_condition')}")
-            if c7.button("削除", key=f"del_{idx}"):
+            c4.write(f"{log.get('moss_condition')}")
+            if c5.button("削除", key=f"del_{idx}"):
                 delete_log(idx)
                 st.success("ログを削除しました。")
                 st.rerun()
