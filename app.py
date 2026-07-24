@@ -91,7 +91,6 @@ def estimate_dynamic_decay_rate(river_name, base_level, default_decay):
 
 
 def estimate_water_temp_bias(river_name, river_info):
-  """実測水温ログからAIが水温のズレ（バイアス）を自動学習・算出する"""
   logs = load_logs()
   river_logs = [
       l for l in logs if l.get("river") == river_name and "measured_water_temp" in l
@@ -784,41 +783,98 @@ if not res["df_hydro"].empty and "time" in res["df_hydro"].columns:
     st.info("指定期間のグラフデータがありません。")
 
 st.markdown("---")
-st.subheader("釣行日の水温推移 & ベスト時合予測")
+st.subheader("釣行日の水温推移 & 5段階活性判定（色分けグラフ）")
 
 temp_data = res["hourly_water_temp"]
 hours = [f"{i:02d}:00" for i in range(24)]
 
-chart_df = pd.DataFrame({"時刻": hours, "推計水温(℃)": temp_data})
 
-chart_temp = (
+# 5段階評価の判定関数
+def get_water_temp_status(t):
+  if t < 16.0:
+    return "① 低水温（〜15.9℃）"
+  elif t < 18.0:
+    return "② やや低め（16.0〜17.9℃）"
+  elif t < 20.0:
+    return "③ 活性上向き（18.0〜19.9℃）"
+  elif t < 24.0:
+    return "④ ベスト時合（20.0〜23.9℃）"
+  else:
+    return "⑤ 高水温注意（24.0℃〜）"
+
+
+statuses = [get_water_temp_status(t) for t in temp_data]
+chart_df = pd.DataFrame(
+    {"時刻": hours, "推計水温(℃)": temp_data, "段階": statuses}
+)
+
+color_scale = alt.Scale(
+    domain=[
+        "① 低水温（〜15.9℃）",
+        "② やや低め（16.0〜17.9℃）",
+        "③ 活性上向き（18.0〜19.9℃）",
+        "④ ベスト時合（20.0〜23.9℃）",
+        "⑤ 高水温注意（24.0℃〜）",
+    ],
+    range=["#3498db", "#5dade2", "#2ecc71", "#e67e22", "#e74c3c"],
+)
+
+chart_line = (
     alt.Chart(chart_df)
-    .mark_line(point=True)
+    .mark_line(interpolate="monotone", strokeWidth=3)
     .encode(
         x=alt.X("時刻:N", sort=None, axis=alt.Axis(labelAngle=0)),
         y=alt.Y("推計水温(℃):Q", scale=alt.Scale(domain=[10, 30])),
-        tooltip=["時刻", "推計水温(℃)"],
     )
-    .properties(height=300)
 )
 
+chart_points = (
+    alt.Chart(chart_df)
+    .mark_circle(size=100)
+    .encode(
+        x=alt.X("時刻:N", sort=None),
+        y=alt.Y("推計水温(℃):Q"),
+        color=alt.Color(
+            "段階:N",
+            scale=color_scale,
+            legend=alt.Legend(title="水温・活性段階"),
+        ),
+        tooltip=["時刻", "推計水温(℃)", "段階"],
+    )
+)
+
+chart_temp = (chart_line + chart_points).properties(height=300)
 st.altair_chart(chart_temp, use_container_width=True)
 
-upward_hours = [i for i, t in enumerate(temp_data) if t >= 18.0 and t < 20.0]
-best_hours = [i for i, t in enumerate(temp_data) if 20.0 <= t <= 24.0]
-over_hours = [i for i, t in enumerate(temp_data) if t > 24.0]
+# 各段階ごとの時間帯集計表示
+status_summary = {}
+for h, t, s in zip(hours, temp_data, statuses):
+  if s not in status_summary:
+    status_summary[s] = []
+  status_summary[s].append(int(h.split(":")[0]))
 
-if best_hours:
-  b_start, b_end = min(best_hours), max(best_hours)
-  st.success(f"ベスト時合 (20℃〜24℃): {b_start:02d}:00 ～ {b_end:02d}:00")
-
-if upward_hours:
-  u_start, u_end = min(upward_hours), max(upward_hours)
-  st.info(f"活性上向き (18℃〜19.9℃): {u_start:02d}:00 ～ {u_end:02d}:00")
-
-if over_hours:
-  o_start, o_end = min(over_hours), max(over_hours)
-  st.warning(f"高水温注意 (24℃超): {o_start:02d}:00 ～ {o_end:02d}:00")
+for s in [
+    "① 低水温（〜15.9℃）",
+    "② やや低め（16.0〜17.9℃）",
+    "③ 活性上向き（18.0〜19.9℃）",
+    "④ ベスト時合（20.0〜23.9℃）",
+    "⑤ 高水温注意（24.0℃〜）",
+]:
+  if s in status_summary and status_summary[s]:
+    hrs = status_summary[s]
+    start_h, end_h = min(hrs), max(hrs)
+    time_str = f"{start_h:02d}:00 ～ {(end_h+1)%24:02d}:00" if start_h != end_h else f"{start_h:02d}:00"
+    
+    if "①" in s:
+      st.info(f"{s}: {time_str}")
+    elif "②" in s:
+      st.info(f"{s}: {time_str}")
+    elif "③" in s:
+      st.success(f"{s}: {time_str}")
+    elif "④" in s:
+      st.warning(f"{s}: {time_str} ⭐おすすめ")
+    elif "⑤" in s:
+      st.error(f"{s}: {time_str}")
 
 st.markdown("---")
 st.subheader("実釣ログの記録（AI学習用）")
