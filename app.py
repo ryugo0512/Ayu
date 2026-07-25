@@ -349,6 +349,22 @@ if not res["df_hydro"].empty and "time" in res["df_hydro"].columns:
         st.altair_chart(hydro_chart, use_container_width=True)
 
 st.markdown("---")
+st.subheader("水温グラフ")
+if not res["df_hydro"].empty and "time" in res["df_hydro"].columns and "estimated_water_temp" in res["df_hydro"].columns:
+    past_days = 7 if graph_range == "直近1週間" else 2
+    start_time = pd.to_datetime(datetime.date.today() - datetime.timedelta(days=past_days))
+    end_time = pd.to_datetime(target_date + datetime.timedelta(days=1))
+    chart_temp = res["df_hydro"][(res["df_hydro"]["time"] >= start_time) & (res["df_hydro"]["time"] < end_time)].copy()
+    if not chart_temp.empty:
+        chart_temp["推定水温(℃)"] = chart_temp["estimated_water_temp"]
+        chart_temp["時間"] = chart_temp["time"].dt.strftime("%m/%d %H時")
+        temp_chart = alt.Chart(chart_temp).mark_line(strokeWidth=2, color="orange").encode(
+            x=alt.X("時間:N", sort=None), y=alt.Y("推定水温(℃):Q", scale=alt.Scale(zero=False)),
+            tooltip=["時間", "推定水温(℃)"]
+        ).properties(height=250)
+        st.altair_chart(temp_chart, use_container_width=True)
+
+st.markdown("---")
 st.subheader("各種ログ保存")
 with st.form("water_temp_form"):
     c1, c2, c3 = st.columns(3)
