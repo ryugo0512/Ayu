@@ -144,15 +144,15 @@ def estimate_water_temp_bias(river_name, river_info):
 
 
 RIVERS = {
-    "尻別川本流（名駒）": {
+    "尻別川本流（豊国橋）": {
         "lat": 42.8021,
         "lon": 140.5251,
         "base_level": 1.81,
         "default_actual": 1.81,
-        "station_name": "名駒",
+        "station_name": "豊国橋",
         "river_system": "尻別川水系 尻別川",
         "weather_url": (
-            "https://weathernews.jp/onebox/river/shiribetsugawa/?pid=2078700400005"
+            "https://weathernews.jp/onebox/river/shiribetsugawa/?pid=2078700400004"
         ),
         "temp_base": 9.0,
         "temp_factor": 0.30,
@@ -309,8 +309,6 @@ def get_weather_desc(code):
         return "⛈️ 雷雨"
     else:
         return "☁️ 曇り"
-
-
 def simulate_water_levels(
     df_weather, base_level, current_actual, river_decay_rate, river_name
 ):
@@ -774,7 +772,6 @@ if not res["target_df"].empty:
         ["時刻", "天気", "気温(℃)", "降水量(mm)", "風速(m/s)"]
     ].set_index("時刻")
     st.dataframe(table_df.T, use_container_width=True)
-
 st.markdown("---")
 st.subheader("水位グラフ（基準水位線 & 蓄積データ・天気予報予測）")
 
@@ -806,9 +803,30 @@ if not res["df_hydro"].empty and "time" in res["df_hydro"].columns:
         chart_hydro["水位(実績・予測)(m)"] = chart_hydro["simulated_level"]
         chart_hydro["時間"] = chart_hydro["time"].dt.strftime("%m/%d %H時")
         chart_hydro = chart_hydro.rename(columns={"base_level": "基準水位線(m)"})
-        chart_hydro = chart_hydro.set_index("時間")
 
-        st.line_chart(chart_hydro[["水位(実績・予測)(m)", "基準水位線(m)"]])
+        min_val = chart_hydro[["水位(実績・予測)(m)", "基準水位線(m)"]].min().min()
+        max_val = chart_hydro[["水位(実績・予測)(m)", "基準水位線(m)"]].max().max()
+        padding = 0.1 
+
+        hydro_melt = chart_hydro.melt(
+            id_vars=["時間"],
+            value_vars=["水位(実績・予測)(m)", "基準水位線(m)"],
+            var_name="凡例",
+            value_name="水位"
+        )
+        
+        hydro_chart = (
+            alt.Chart(hydro_melt)
+            .mark_line(strokeWidth=2)
+            .encode(
+                x=alt.X("時間:N", sort=None, axis=alt.Axis(labelAngle=-45)),
+                y=alt.Y("水位:Q", scale=alt.Scale(domain=[min_val - padding, max_val + padding])),
+                color=alt.Color("凡例:N", legend=alt.Legend(title=None, orient="bottom")),
+                tooltip=["時間", "凡例", "水位"]
+            )
+            .properties(height=300)
+        )
+        st.altair_chart(hydro_chart, use_container_width=True)
     else:
         st.info("指定期間のグラフデータがありません。")
 
@@ -866,7 +884,11 @@ chart_points = (
         color=alt.Color(
             "段階:N",
             scale=color_scale,
-            legend=alt.Legend(title="水温・活性段階"),
+            legend=alt.Legend(
+                title="水温・活性段階",
+                orient="bottom", 
+                columns=2         
+            ),
         ),
         tooltip=["時刻", "推計水温(℃)", "段階"],
     )
@@ -910,9 +932,6 @@ for s in [
 
 st.markdown("---")
 
-# ==========================================
-# 1. 現地水温データの単体記録セクション
-# ==========================================
 st.subheader("🌡️ 現地水温データの記録（1時間ごと等・単体保存）")
 
 with st.form("water_temp_form"):
@@ -971,9 +990,6 @@ if water_temp_logs:
 
 st.markdown("---")
 
-# ==========================================
-# 2. 実釣ログの記録セクション（釣果・ハミ垢のみ）
-# ==========================================
 st.subheader("🎣 実釣ログの記録（釣果・ハミ垢・AI学習用）")
 
 with st.form("log_form"):
