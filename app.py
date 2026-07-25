@@ -113,7 +113,7 @@ def estimate_water_temp_bias(river_name, river_info):
 
 RIVERS = {
     "尻別川本流（豊国橋）": {
-        "lat": 42.8021, "lon": 140.5251, "base_level": 1.81, "default_actual": 1.81,
+        "lat": 42.8021, "lon": 140.5251, "base_level": 9.08, "default_actual": 9.08,
         "station_name": "豊国橋", "river_system": "尻別川水系 尻別川",
         "weather_url": "https://weathernews.jp/onebox/river/shiribetsugawa/?pid=2078700400004",
         "temp_base": 9.0, "temp_factor": 0.30, "max_temp": 20.0, "decay_rate": 0.9975,
@@ -295,17 +295,13 @@ def analyze_condition(df_weather, is_weather_live, river_info, user_logs, target
     }
 st.title("北海道 鮎コンディション判定")
 
-col_sel1, col_sel2, col_sel3 = st.columns(3)
+col_sel1, col_sel2 = st.columns(2)
 with col_sel1:
     target_river = st.selectbox("河川を選択", list(RIVERS.keys()))
 with col_sel2:
     today_date = datetime.date.today()
     target_date = st.date_input("釣行予定日", today_date, min_value=today_date - datetime.timedelta(days=7), max_value=today_date + datetime.timedelta(days=5))
-with col_sel3:
-    default_base = RIVERS[target_river]["base_level"]
-    adjusted_base_level = st.number_input("基準水位の微調整(m)", value=default_base, step=0.01)
 
-RIVERS[target_river]["base_level"] = adjusted_base_level
 river_info = RIVERS[target_river]
 
 current_actual, fetch_source = fetch_weather_water_level(river_info["weather_url"], river_info["default_actual"])
@@ -331,17 +327,6 @@ col5.metric("ハミ垢", f"{res['moss_growth']} %")
 col6.metric("風速", f"{res['max_wind']:.1f} m/s")
 
 st.write(f"大水からの経過日数: {res['days_since_flood']} 日 / 濁り予測: {res['clarity_recovery']} / アラート: {res['moss_alert']}")
-
-st.markdown("---")
-st.subheader("過去の水位履歴データ")
-water_hist = load_water_history()
-if water_hist and target_river in water_hist:
-    hist_df = pd.DataFrame(list(water_hist[target_river].items()), columns=["記録日時", "水位(m)"])
-    hist_df["記録日時"] = pd.to_datetime(hist_df["記録日時"])
-    hist_df = hist_df.sort_values("記録日時", ascending=False).reset_index(drop=True)
-    st.dataframe(hist_df, use_container_width=True)
-else:
-    st.info("過去の水位記録がありません。")
 
 st.markdown("---")
 st.subheader("水位グラフ")
