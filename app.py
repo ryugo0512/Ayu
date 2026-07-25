@@ -349,7 +349,7 @@ if not res["df_hydro"].empty and "time" in res["df_hydro"].columns:
         st.altair_chart(hydro_chart, use_container_width=True)
 
 st.markdown("---")
-st.subheader("水温グラフ")
+st.subheader("水温グラフ & 活性予測")
 if not res["df_hydro"].empty and "time" in res["df_hydro"].columns and "estimated_water_temp" in res["df_hydro"].columns:
     past_days = 7 if graph_range == "直近1週間" else 2
     start_time = pd.to_datetime(datetime.date.today() - datetime.timedelta(days=past_days))
@@ -364,8 +364,25 @@ if not res["df_hydro"].empty and "time" in res["df_hydro"].columns and "estimate
         ).properties(height=250)
         st.altair_chart(temp_chart, use_container_width=True)
 
+    # 釣行日の時間帯ごとの水温から活性化のタイミングを算出して表示
+    if not res["target_df"].empty and "estimated_water_temp" in res["target_df"].columns:
+        t_df = res["target_df"].copy()
+        t_df["hour"] = t_df["time"].dt.hour
+        temps = t_df["estimated_water_temp"].tolist()
+        hours = t_df["hour"].tolist()
+        
+        # 活性が上がる目安（例: 15℃以上または最高水温の帯）を抽出
+        active_hours = [h for h, temp in zip(hours, temps) if temp >= 15.0]
+        if active_hours:
+            first_active = min(active_hours)
+            peak_temp = max(temps)
+            peak_hour = hours[temps.index(peak_temp)]
+            st.info(f"【水温・活性予測】釣行日は **{first_active}時頃** から水温が15℃を超えて活性が上がり始め、**{peak_hour}時頃** に最高水温 **{peak_temp:.1f}℃** に達する予測です。（AI学習バイアス補正: {res['learned_temp_bias']:+.1f}℃）")
+        else:
+            st.warning(f"【水温・活性予測】釣行日は全体的に水温が低め（最高 {max(temps)::.1f}℃）の予測です。日中の温かい時間帯を狙うのが有効です。（AI学習バイアス補正: {res['learned_temp_bias']:+.1f}℃）")
+
 st.markdown("---")
-st.subheader("各種ログ保存")
+st.subheader("各種ログ保存（AI学習用データ入力）")
 with st.form("water_temp_form"):
     c1, c2, c3 = st.columns(3)
     wt_date = c1.date_input("水温測定日", today_date)
