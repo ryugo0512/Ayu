@@ -9,14 +9,11 @@ import pandas as pd
 import requests
 import streamlit as st
 
-st.set_page_config(
-    page_title="北海道 鮎コンディション判定", page_icon="🐟", layout="wide"
-)
+st.set_page_config(page_title="北海道 鮎コンディション判定", page_icon="🐟", layout="wide")
 
 LOG_FILE = "fishing_logs.json"
 WATER_TEMP_LOG_FILE = "water_temp_logs.json"
 WATER_LOG_FILE = "water_levels_history.json"
-
 
 def load_logs():
     if os.path.exists(LOG_FILE):
@@ -24,17 +21,14 @@ def load_logs():
             return json.load(f)
     return []
 
-
 def save_logs(logs):
     with open(LOG_FILE, "w", encoding="utf-8") as f:
         json.dump(logs, f, ensure_ascii=False, indent=2)
-
 
 def save_log(log_entry):
     logs = load_logs()
     logs.append(log_entry)
     save_logs(logs)
-
 
 def delete_log(index):
     logs = load_logs()
@@ -42,24 +36,20 @@ def delete_log(index):
         logs.pop(index)
         save_logs(logs)
 
-
 def load_water_temp_logs():
     if os.path.exists(WATER_TEMP_LOG_FILE):
         with open(WATER_TEMP_LOG_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     return []
 
-
 def save_water_temp_logs(logs):
     with open(WATER_TEMP_LOG_FILE, "w", encoding="utf-8") as f:
         json.dump(logs, f, ensure_ascii=False, indent=2)
-
 
 def save_water_temp_log(log_entry):
     logs = load_water_temp_logs()
     logs.append(log_entry)
     save_water_temp_logs(logs)
-
 
 def delete_water_temp_log(index):
     logs = load_water_temp_logs()
@@ -67,13 +57,11 @@ def delete_water_temp_log(index):
         logs.pop(index)
         save_water_temp_logs(logs)
 
-
 def load_water_history():
     if os.path.exists(WATER_LOG_FILE):
         with open(WATER_LOG_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     return {}
-
 
 def save_water_history(river_name, timestamp_str, level):
     history = load_water_history()
@@ -83,187 +71,101 @@ def save_water_history(river_name, timestamp_str, level):
     with open(WATER_LOG_FILE, "w", encoding="utf-8") as f:
         json.dump(history, f, ensure_ascii=False, indent=2)
 
-
 def estimate_dynamic_decay_rate(river_name, base_level, default_decay):
     history = load_water_history().get(river_name, {})
     if len(history) < 10:
         return default_decay
-
     sorted_times = sorted(history.keys())
     ratios = []
     for i in range(1, len(sorted_times)):
         t_prev, t_curr = sorted_times[i - 1], sorted_times[i]
-        l_prev = history[t_prev]
-        l_curr = history[t_curr]
-
+        l_prev, l_curr = history[t_prev], history[t_curr]
         try:
-            dt = (
-                pd.to_datetime(t_curr) - pd.to_datetime(t_prev)
-            ).total_seconds() / 3600.0
+            dt = (pd.to_datetime(t_curr) - pd.to_datetime(t_prev)).total_seconds() / 3600.0
             if 0.8 <= dt <= 1.5:
                 if l_prev > base_level and l_curr > base_level and l_curr < l_prev:
-                    diff_prev = l_prev - base_level
-                    diff_curr = l_curr - base_level
-                    ratio = (diff_curr / diff_prev) ** (1.0 / dt)
+                    ratio = ((l_curr - base_level) / (l_prev - base_level)) ** (1.0 / dt)
                     if 0.90 <= ratio <= 0.9999:
                         ratios.append(ratio)
         except Exception:
             continue
-
     if len(ratios) >= 5:
-        dynamic_rate = float(np.median(ratios))
-        return dynamic_rate
+        return float(np.median(ratios))
     return default_decay
-
 
 def estimate_water_temp_bias(river_name, river_info):
     temp_logs = load_water_temp_logs()
-    river_logs = [
-        l for l in temp_logs if l.get("river") == river_name and "measured_water_temp" in l
-    ]
+    river_logs = [l for l in temp_logs if l.get("river") == river_name and "measured_water_temp" in l]
     if not river_logs:
         return 0.0
-
     biases = []
     for l in river_logs:
         try:
             l_date = datetime.date.fromisoformat(l["date"])
             day_of_year = l_date.timetuple().tm_yday
-            seasonal_temp_offset = 2.0 * np.sin(2 * np.pi * (day_of_year - 170) / 365)
-            calc_base = river_info["temp_base"] + seasonal_temp_offset
-            default_est = calc_base + (20.0 * river_info["temp_factor"])
-            measured = l["measured_water_temp"]
-            diff = measured - default_est
-            biases.append(diff)
+            calc_base = river_info["temp_base"] + 2.0 * np.sin(2 * np.pi * (day_of_year - 170) / 365)
+            biases.append(l["measured_water_temp"] - (calc_base + (20.0 * river_info["temp_factor"])))
         except Exception:
             continue
-
     if biases:
         return float(np.median(biases))
     return 0.0
 
-
 RIVERS = {
     "尻別川本流（豊国橋）": {
-        "lat": 42.8021,
-        "lon": 140.5251,
-        "base_level": 1.81,
-        "default_actual": 1.81,
-        "station_name": "豊国橋",
-        "river_system": "尻別川水系 尻別川",
-        "weather_url": (
-            "https://weathernews.jp/onebox/river/shiribetsugawa/?pid=2078700400004"
-        ),
-        "temp_base": 9.0,
-        "temp_factor": 0.30,
-        "max_temp": 20.0,
-        "decay_rate": 0.9975,
+        "lat": 42.8021, "lon": 140.5251, "base_level": 1.81, "default_actual": 1.81,
+        "station_name": "豊国橋", "river_system": "尻別川水系 尻別川",
+        "weather_url": "https://weathernews.jp/onebox/river/shiribetsugawa/?pid=2078700400004",
+        "temp_base": 9.0, "temp_factor": 0.30, "max_temp": 20.0, "decay_rate": 0.9975,
     },
     "昆布川（昆布）": {
-        "lat": 42.7958,
-        "lon": 140.5986,
-        "base_level": 43.58,
-        "default_actual": 43.58,
-        "station_name": "昆布川橋",
-        "river_system": "尻別川水系 昆布川",
-        "weather_url": (
-            "https://weathernews.jp/onebox/river/shiribetsugawa/?pid=0025700400389"
-        ),
-        "temp_base": 8.5,
-        "temp_factor": 0.32,
-        "max_temp": 19.5,
-        "decay_rate": 0.9970,
+        "lat": 42.7958, "lon": 140.5986, "base_level": 43.58, "default_actual": 43.58,
+        "station_name": "昆布川橋", "river_system": "尻別川水系 昆布川",
+        "weather_url": "https://weathernews.jp/onebox/river/shiribetsugawa/?pid=0025700400389",
+        "temp_base": 8.5, "temp_factor": 0.32, "max_temp": 19.5, "decay_rate": 0.9970,
     },
     "天ノ川（上ノ国）": {
-        "lat": 41.7997,
-        "lon": 140.1163,
-        "base_level": 1.60,
-        "default_actual": 1.60,
-        "station_name": "古守大橋",
-        "river_system": "天ノ川水系 天ノ川",
-        "weather_url": (
-            "https://weathernews.jp/onebox/river/?pid=0025700400132"
-        ),
-        "temp_base": 10.0,
-        "temp_factor": 0.35,
-        "max_temp": 21.0,
-        "decay_rate": 0.9975,
+        "lat": 41.7997, "lon": 140.1163, "base_level": 1.60, "default_actual": 1.60,
+        "station_name": "古守大橋", "river_system": "天ノ川水系 天ノ川",
+        "weather_url": "https://weathernews.jp/onebox/river/?pid=0025700400132",
+        "temp_base": 10.0, "temp_factor": 0.35, "max_temp": 21.0, "decay_rate": 0.9975,
     },
     "朱太川（黒松内）": {
-        "lat": 42.6683,
-        "lon": 140.3061,
-        "base_level": 1.44,
-        "default_actual": 1.44,
-        "station_name": "朱太川実橋",
-        "river_system": "朱太川水系 朱太川",
-        "weather_url": (
-            "https://weathernews.jp/onebox/river/shubutogawa/?pid=0025700400387"
-        ),
-        "temp_base": 9.5,
-        "temp_factor": 0.32,
-        "max_temp": 20.5,
-        "decay_rate": 0.9972,
+        "lat": 42.6683, "lon": 140.3061, "base_level": 1.44, "default_actual": 1.44,
+        "station_name": "朱太川実橋", "river_system": "朱太川水系 朱太川",
+        "weather_url": "https://weathernews.jp/onebox/river/shubutogawa/?pid=0025700400387",
+        "temp_base": 9.5, "temp_factor": 0.32, "max_temp": 20.5, "decay_rate": 0.9972,
     },
 }
 
-
 @st.cache_data(ttl=600)
 def fetch_weather_water_level(url, default_val):
-    if not url:
-        return default_val, "デフォルト値"
-
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,"
-            " like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        )
-    }
-
+    if not url: return default_val, "デフォルト値"
+    headers = {"User-Agent": "Mozilla/5.0"}
     for attempt in range(2):
         try:
             res = requests.get(url, headers=headers, timeout=3)
             res.raise_for_status()
-
-            clean_text = re.sub(r"<[^>]+>", " ", res.text)
-            clean_text = " ".join(clean_text.split())
-
+            clean_text = " ".join(re.sub(r"<[^>]+>", " ", res.text).split())
             match = re.search(r"現在水位\s*(\d+\.\d{2})\s*m", clean_text)
-            if match:
-                return float(match.group(1)), "ウェザーニュース (自動取得)"
-
+            if match: return float(match.group(1)), "自動取得"
             match = re.search(r"\d{1,2}:\d{2}\s*時点\s*(\d+\.\d{2})\s*m", clean_text)
-            if match:
-                return float(match.group(1)), "ウェザーニュース (自動取得)"
-
+            if match: return float(match.group(1)), "自動取得"
             match = re.search(r"時点\s*(\d+\.\d{2})\s*m", clean_text)
-            if match:
-                return float(match.group(1)), "ウェザーニュース (自動取得)"
-
+            if match: return float(match.group(1)), "自動取得"
             matches = re.findall(r"(\d+\.\d{2})\s*m", clean_text)
             if matches:
                 for m_str in matches:
                     val = float(m_str)
-                    if (
-                        abs(val - default_val) > 0.001
-                        and abs(val - default_val) <= 3.0
-                    ):
-                        return val, "ウェザーニュース (自動取得)"
-                return float(matches[0]), "ウェザーニュース (自動取得)"
-
-            return default_val, "デフォルト値 (数値未検出)"
+                    if 0.001 < abs(val - default_val) <= 3.0: return val, "自動取得"
+                return float(matches[0]), "自動取得"
+            return default_val, "デフォルト(未検出)"
         except Exception:
-            if attempt == 0:
-                time.sleep(5)
-            else:
-                return default_val, "デフォルト値 (通信タイムアウト・エラー)"
-
-    return default_val, "デフォルト値 (通信エラー)"
-
-
+            if attempt == 0: time.sleep(2)
+    return default_val, "デフォルト(通信エラー)"
 @st.cache_data(ttl=3600)
 def fetch_weather_data(lat, lon):
     url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=temperature_2m,precipitation,weathercode,sunshine_duration,shortwave_radiation,windspeed_10m&windspeed_unit=ms&past_days=7&forecast_days=16&timezone=Asia%2FTokyo"
-
     for attempt in range(2):
         try:
             res = requests.get(url, timeout=5)
@@ -274,88 +176,44 @@ def fetch_weather_data(lat, lon):
                 df["time"] = pd.to_datetime(df["time"])
                 return df, True
         except Exception:
-            if attempt == 0:
-                time.sleep(5)
-            else:
-                pass
-
+            if attempt == 0: time.sleep(2)
     now = pd.Timestamp.now().floor("h")
-    date_range = pd.date_range(
-        end=now + pd.Timedelta(days=16), periods=24 * 16, freq="h"
-    )
     df_dummy = pd.DataFrame({
-        "time": date_range,
-        "temperature_2m": 20.0,
-        "precipitation": 0.0,
-        "weathercode": 0,
-        "shortwave_radiation": 200.0,
-        "windspeed_10m": 2.0,
+        "time": pd.date_range(end=now + pd.Timedelta(days=16), periods=24 * 16, freq="h"),
+        "temperature_2m": 20.0, "precipitation": 0.0, "weathercode": 0,
+        "shortwave_radiation": 200.0, "windspeed_10m": 2.0,
     })
     return df_dummy, False
 
-
 def get_weather_desc(code):
-    if code in [0]:
-        return "☀️ 快晴"
-    elif code in [1, 2]:
-        return "🌤️ 晴れ時々曇り"
-    elif code in [3]:
-        return "☁️ 曇り"
-    elif code in [45, 48]:
-        return "🌫️ 霧"
-    elif code in [51, 53, 55, 61, 63, 65, 80, 81, 82]:
-        return "🌧️ 雨"
-    elif code in [95, 96, 99]:
-        return "⛈️ 雷雨"
-    else:
-        return "☁️ 曇り"
-def simulate_water_levels(
-    df_weather, base_level, current_actual, river_decay_rate, river_name
-):
-    if (
-        df_weather is None
-        or df_weather.empty
-        or "precipitation" not in df_weather.columns
-    ):
-        df_weather = pd.DataFrame({
-            "time": [pd.Timestamp.now()],
-            "simulated_level": [current_actual],
-            "precipitation": [0.0],
-            "temperature_2m": [20.0],
-            "weathercode": [0],
-            "shortwave_radiation": [200.0],
-            "windspeed_10m": [2.0],
-        })
-        return df_weather
+    if code in [0]: return "快晴"
+    elif code in [1, 2]: return "晴れ時々曇り"
+    elif code in [3]: return "曇り"
+    elif code in [45, 48]: return "霧"
+    elif code in [51, 53, 55, 61, 63, 65, 80, 81, 82]: return "雨"
+    elif code in [95, 96, 99]: return "雷雨"
+    return "曇り"
 
+def simulate_water_levels(df_weather, base_level, current_actual, river_decay_rate, river_name):
+    if df_weather is None or df_weather.empty or "precipitation" not in df_weather.columns:
+        return pd.DataFrame({"time": [pd.Timestamp.now()], "simulated_level": [current_actual]})
     df_weather = df_weather.sort_values("time").reset_index(drop=True)
     history = load_water_history().get(river_name, {})
-
     now = pd.Timestamp.now().floor("h")
     time_diffs = (df_weather["time"] - now).abs()
     now_idx = int(time_diffs.idxmin())
-
     simulated_levels = np.full(len(df_weather), np.nan)
-
     simulated_levels[now_idx] = current_actual
-
     for i in range(now_idx - 1, -1, -1):
         t_str = df_weather.loc[i, "time"].strftime("%Y-%m-%d %H:00")
-        if t_str in history:
-            simulated_levels[i] = history[t_str]
-        else:
-            simulated_levels[i] = np.nan
-
+        simulated_levels[i] = history.get(t_str, np.nan)
     curr_lvl = current_actual
     eff_decay = np.exp(-np.log(2) / 48.0)
-    runoff_factor = 0.035
     fut_eff_rain = 0.0
-
     for i in range(now_idx + 1, len(df_weather)):
         rain = df_weather.loc[i, "precipitation"]
         fut_eff_rain = fut_eff_rain * eff_decay + rain
-        rain_imp = rain * runoff_factor + fut_eff_rain * 0.001
-
+        rain_imp = rain * 0.035 + fut_eff_rain * 0.001
         diff_from_base = curr_lvl - base_level
         if diff_from_base > 0:
             next_diff = diff_from_base * river_decay_rate + rain_imp
@@ -363,691 +221,165 @@ def simulate_water_levels(
             next_diff = diff_from_base + rain_imp
         curr_lvl = base_level + max(-0.25, next_diff)
         simulated_levels[i] = curr_lvl
-
     df_weather["simulated_level"] = simulated_levels
     return df_weather
 
-
-def analyze_condition(
-    df_weather,
-    is_weather_live,
-    river_info,
-    user_logs,
-    target_river,
-    target_date,
-    current_actual,
-):
+def analyze_condition(df_weather, is_weather_live, river_info, user_logs, target_river, target_date, current_actual):
     effective_base = river_info["base_level"]
-    default_decay = river_info.get("decay_rate", 0.9975)
-
-    river_decay_rate = estimate_dynamic_decay_rate(
-        target_river, effective_base, default_decay
-    )
+    river_decay_rate = estimate_dynamic_decay_rate(target_river, effective_base, river_info.get("decay_rate", 0.9975))
     temp_bias = estimate_water_temp_bias(target_river, river_info)
-
-    df_weather = simulate_water_levels(
-        df_weather, effective_base, current_actual, river_decay_rate, target_river
-    )
-
+    df_weather = simulate_water_levels(df_weather, effective_base, current_actual, river_decay_rate, target_river)
     target_datetime = datetime.datetime.combine(target_date, datetime.time(12, 0))
-
-    bias_growth = 0.0
-    river_logs = [l for l in user_logs if l.get("river") == target_river]
-    if len(river_logs) > 0:
-        feedbacks = [l.get("moss_feedback", 0) for l in river_logs]
-        bias_growth = np.mean(feedbacks) * 0.1
-
+    bias_growth = np.mean([l.get("moss_feedback", 0) for l in user_logs if l.get("river") == target_river] or [0]) * 0.1
     day_of_year = target_date.timetuple().tm_yday
-    seasonal_temp_offset = 2.0 * np.sin(2 * np.pi * (day_of_year - 170) / 365)
-    adjusted_temp_base = river_info["temp_base"] + seasonal_temp_offset
-
-    temp_col = (
-        "temperature_2m"
-        if "temperature_2m" in df_weather.columns
-        else df_weather.columns[1]
-    )
-    raw_water_temp = (
-        adjusted_temp_base
-        + (df_weather[temp_col] * river_info["temp_factor"])
-        + temp_bias
-    )
-    df_weather["estimated_water_temp"] = np.minimum(
-        raw_water_temp, river_info["max_temp"]
-    )
-
-    target_df = (
-        df_weather[df_weather["time"].dt.date == target_date].copy()
-        if "time" in df_weather.columns
-        else pd.DataFrame()
-    )
-    has_precipitation_data = (
-        is_weather_live and not target_df.empty and len(target_df) >= 24
-    )
-
-    df_past = (
-        df_weather[df_weather["time"] <= target_datetime].copy()
-        if "time" in df_weather.columns
-        else df_weather.copy()
-    )
+    adjusted_temp_base = river_info["temp_base"] + 2.0 * np.sin(2 * np.pi * (day_of_year - 170) / 365)
+    temp_col = "temperature_2m" if "temperature_2m" in df_weather.columns else df_weather.columns[1]
+    df_weather["estimated_water_temp"] = np.minimum(adjusted_temp_base + (df_weather[temp_col] * river_info["temp_factor"]) + temp_bias, river_info["max_temp"])
+    target_df = df_weather[df_weather["time"].dt.date == target_date].copy() if "time" in df_weather.columns else pd.DataFrame()
+    df_past = df_weather[df_weather["time"] <= target_datetime].copy() if "time" in df_weather.columns else df_weather.copy()
     if "precipitation" in df_past.columns:
-        df_past["rain_12h"] = (
-            df_past["precipitation"].rolling(12, min_periods=1).sum()
-        )
-        heavy_rain_events = df_past[
-            (df_past["precipitation"] >= 30.0) | (df_past["rain_12h"] >= 60.0)
-        ]
-    else:
-        heavy_rain_events = pd.DataFrame()
-
-    if not heavy_rain_events.empty and "time" in heavy_rain_events.columns:
-        last_flood_time = heavy_rain_events["time"].max()
-        days_since_flood = (target_datetime - last_flood_time).days
+        df_past["rain_12h"] = df_past["precipitation"].rolling(12, min_periods=1).sum()
+        heavy_events = df_past[(df_past["precipitation"] >= 30.0) | (df_past["rain_12h"] >= 60.0)]
+        days_since_flood = (target_datetime - heavy_events["time"].max()).days if not heavy_events.empty else 10
     else:
         days_since_flood = 10
-
-    target_24h_rain = (
-        df_past.tail(24)["precipitation"].sum()
-        if "precipitation" in df_past.columns and not df_past.empty
-        else 0.0
-    )
-    if target_24h_rain > 60:
-        clarity_recovery = "強濁り（回復まで約2～3日）"
-        clarity_score = 1
-    elif target_24h_rain > 30:
-        clarity_recovery = "笹濁り（回復途上）"
-        clarity_score = 2
-    else:
-        clarity_recovery = "清澄（良好）"
-        clarity_score = 3
-
+    recent_rain = df_past.tail(24)["precipitation"].sum() if "precipitation" in df_past.columns else 0.0
+    clarity_recovery = "強濁り" if recent_rain > 60 else "笹濁り" if recent_rain > 30 else "清澄"
+    clarity_score = 1 if recent_rain > 60 else 2 if recent_rain > 30 else 3
     m, d = target_date.month, target_date.day
-    if m == 7 and d <= 15:
-        season_mode = "初期（低水温・緩速成長）"
-        growth_rate = 9.0
-    elif (m == 7 and d > 15) or (m == 8 and d <= 15):
-        season_mode = "盛期（高水温・高活性）"
-        growth_rate = 12.5
-    elif m == 8 and d > 15:
-        season_mode = "晩夏・成熟期"
-        growth_rate = 10.0
-    else:
-        season_mode = "終盤・落ち鮎（再生遅延）"
-        growth_rate = 7.0
-
-    recent_radiation = (
-        df_past.tail(max(24, days_since_flood * 24))[
-            "shortwave_radiation"
-        ].mean()
-        if "shortwave_radiation" in df_past.columns and not df_past.empty
-        else 150.0
-    )
-    radiation_factor = max(0.7, min(1.3, recent_radiation / 180.0))
-
-    moss_growth = min(
-        100,
-        int(
-            (days_since_flood * growth_rate * radiation_factor)
-            * (1.0 + bias_growth)
-        ),
-    )
-
+    if m == 7 and d <= 15: season_mode, growth_rate = "初期", 9.0
+    elif (m == 7 and d > 15) or (m == 8 and d <= 15): season_mode, growth_rate = "盛期", 12.5
+    elif m == 8 and d > 15: season_mode, growth_rate = "晩夏", 10.0
+    else: season_mode, growth_rate = "終盤", 7.0
+    recent_rad = df_past.tail(max(24, days_since_flood * 24))["shortwave_radiation"].mean() if "shortwave_radiation" in df_past.columns else 150.0
+    moss_growth = min(100, int((days_since_flood * growth_rate * max(0.7, min(1.3, recent_rad / 180.0))) * (1.0 + bias_growth)))
     if not target_df.empty and len(target_df) >= 24:
         hourly_water_temp = target_df["estimated_water_temp"].tolist()[:24]
-
-        if target_date == datetime.date.today():
-            display_water_level = current_actual
-        else:
-            display_water_level = target_df["simulated_level"].mean()
-
-        most_code = (
-            target_df["weathercode"].mode()[0]
-            if "weathercode" in target_df.columns
-            and not target_df["weathercode"].empty
-            else 0
-        )
-        weather_desc = get_weather_desc(most_code)
-        temp_max = (
-            target_df["temperature_2m"].max()
-            if "temperature_2m" in target_df.columns
-            else 20.0
-        )
-        temp_min = (
-            target_df["temperature_2m"].min()
-            if "temperature_2m" in target_df.columns
-            else 15.0
-        )
-        water_temp_max = max(hourly_water_temp)
-        water_temp_avg = float(np.mean(hourly_water_temp))
-        max_wind = (
-            target_df["windspeed_10m"].max()
-            if "windspeed_10m" in target_df.columns
-            else 2.0
-        )
+        display_water_level = current_actual if target_date == datetime.date.today() else target_df["simulated_level"].mean()
+        weather_desc = get_weather_desc(target_df["weathercode"].mode()[0] if "weathercode" in target_df.columns else 0)
+        temp_max, temp_min = target_df["temperature_2m"].max(), target_df["temperature_2m"].min()
+        water_temp_max, water_temp_avg = max(hourly_water_temp), float(np.mean(hourly_water_temp))
+        max_wind = target_df["windspeed_10m"].max()
     else:
-        hourly_water_temp = [
-            14.0 + (i if i <= 14 else 28 - i) * 0.3 for i in range(24)
-        ]
+        hourly_water_temp = [14.0 + (i if i <= 14 else 28 - i) * 0.3 for i in range(24)]
         display_water_level = current_actual
-        weather_desc = "☀️ 晴れ"
-        temp_max, temp_min = 22.0, 16.0
-        water_temp_max, water_temp_avg = 17.5, 15.8
-        max_wind = 2.0
-
+        weather_desc, temp_max, temp_min, water_temp_max, water_temp_avg, max_wind = "晴れ", 22.0, 16.0, 17.5, 15.8, 2.0
     level_diff = display_water_level - effective_base
-
-    if level_diff < -0.10:
-        level_trend = f"📉 渇水傾向 ({level_diff*100:+.0f}cm)"
-    elif level_diff <= 0.15:
-        level_trend = f"✨ 平水〜好条件 ({level_diff*100:+.0f}cm)"
-    elif level_diff <= 0.40:
-        level_trend = f"⚠️ やや高水 ({level_diff*100:+.0f}cm：少し多い)"
-    else:
-        level_trend = f"🚨 大幅高水 ({level_diff*100:+.0f}cm：釣り困難)"
-
-    if days_since_flood <= 1 or moss_growth < 20:
-        moss_alert = "🚫 全飛び直後（垢ナシ・石白っぽい）"
-    elif days_since_flood <= 3 or moss_growth < 50:
-        moss_alert = "🟡 垢付き始め（まだ薄く喰い浅い）"
-    elif level_diff < -0.15 and days_since_flood > 10:
-        moss_alert = "⚠️ 垢腐り・泥垢注意（渇水進行）"
-    else:
-        moss_alert = "✅ 新垢形成完了（良好）"
-
-    df_future = (
-        df_weather[df_weather["time"] >= target_datetime].head(24)
-        if "time" in df_weather.columns
-        else pd.DataFrame()
-    )
-    future_rain = (
-        df_future["precipitation"].sum()
-        if "precipitation" in df_future.columns and not df_future.empty
-        else 0.0
-    )
-    if future_rain > 50.0:
-        flood_risk = "🚨 警戒：全飛び（＋50cm超の大増水）リスク高"
-    elif future_rain > 25.0:
-        flood_risk = "⚠️ 注意：雨による増水（＋30cm前後）の可能性"
-    else:
-        flood_risk = "🟢 安定：増水リスク低"
-
-    temp_peak_hours = len([t for t in hourly_water_temp if t >= 18.0])
-    temp_pts = (
-        3 if temp_peak_hours >= 4 else (2 if temp_peak_hours >= 2 else 1)
-    )
-
+    if level_diff < -0.10: level_trend = f"渇水 ({level_diff*100:+.0f}cm)"
+    elif level_diff <= 0.15: level_trend = f"平水 ({level_diff*100:+.0f}cm)"
+    elif level_diff <= 0.40: level_trend = f"やや高水 ({level_diff*100:+.0f}cm)"
+    else: level_trend = f"大増水 ({level_diff*100:+.0f}cm)"
+    if days_since_flood <= 1 or moss_growth < 20: moss_alert = "全飛び直後"
+    elif days_since_flood <= 3 or moss_growth < 50: moss_alert = "垢付き始め"
+    elif level_diff < -0.15 and days_since_flood > 10: moss_alert = "垢腐り注意"
+    else: moss_alert = "新垢良好"
+    df_future = df_weather[df_weather["time"] >= target_datetime].head(24) if "time" in df_weather.columns else pd.DataFrame()
+    fut_rain = df_future["precipitation"].sum() if "precipitation" in df_future.columns else 0.0
+    flood_risk = "警戒" if fut_rain > 50.0 else "注意" if fut_rain > 25.0 else "安定"
+    temp_pts = 3 if len([t for t in hourly_water_temp if t >= 18.0]) >= 4 else (2 if len([t for t in hourly_water_temp if t >= 18.0]) >= 2 else 1)
     raw_score = int((moss_growth / 100) * 4) + clarity_score + temp_pts
-
-    if days_since_flood <= 2:
-        max_cap = 3
-    elif days_since_flood <= 4:
-        max_cap = 5
-    else:
-        max_cap = 10
-
-    score = max(1, min(raw_score, max_cap))
-
-    if level_diff <= -0.30:
-        score -= 3
-    elif level_diff <= -0.20:
-        score -= 2
-    elif level_diff < 0:
-        score -= 1
-
-    score = max(1, score)
-
-    if level_diff >= 0.50:
-        score = 1
-    elif level_diff >= 0.30:
-        score = min(score, 3)
-    elif level_diff >= 0.15:
-        score = min(score, 7)
-
+    score = max(1, min(raw_score, 3 if days_since_flood <= 2 else 5 if days_since_flood <= 4 else 10))
+    if level_diff <= -0.30: score -= 3
+    elif level_diff <= -0.20: score -= 2
+    elif level_diff < 0: score -= 1
+    score = max(1, min(score, 1 if level_diff >= 0.50 else 3 if level_diff >= 0.30 else 7 if level_diff >= 0.15 else 10))
     df_hydro = df_weather.copy()
     df_hydro["base_level"] = effective_base
-
     return {
-        "water_level": display_water_level,
-        "level_trend": level_trend,
-        "days_since_flood": days_since_flood,
-        "moss_growth": moss_growth,
-        "moss_alert": moss_alert,
-        "flood_risk": flood_risk,
-        "clarity_recovery": clarity_recovery,
-        "season_mode": season_mode,
-        "score": score,
-        "hourly_water_temp": hourly_water_temp,
-        "df_hydro": df_hydro,
-        "target_df": target_df,
-        "weather_desc": weather_desc,
-        "temp_max": temp_max,
-        "temp_min": temp_min,
-        "water_temp_max": water_temp_max,
-        "water_temp_avg": water_temp_avg,
-        "max_wind": max_wind,
-        "level_diff": level_diff,
-        "has_precipitation_data": has_precipitation_data,
-        "learned_decay": river_decay_rate,
-        "learned_temp_bias": temp_bias,
+        "water_level": display_water_level, "level_trend": level_trend, "days_since_flood": days_since_flood,
+        "moss_growth": moss_growth, "moss_alert": moss_alert, "flood_risk": flood_risk, "clarity_recovery": clarity_recovery,
+        "season_mode": season_mode, "score": score, "hourly_water_temp": hourly_water_temp, "df_hydro": df_hydro,
+        "target_df": target_df, "weather_desc": weather_desc, "temp_max": temp_max, "temp_min": temp_min,
+        "water_temp_max": water_temp_max, "water_temp_avg": water_temp_avg, "max_wind": max_wind, "level_diff": level_diff,
+        "has_precipitation_data": ("precipitation" in df_weather.columns), "learned_decay": river_decay_rate, "learned_temp_bias": temp_bias
     }
+st.title("北海道 鮎コンディション判定")
 
-
-st.title("北海道 鮎コンディション判定 & 未来予測")
-
-col_sel1, col_sel2 = st.columns(2)
+col_sel1, col_sel2, col_sel3 = st.columns(3)
 with col_sel1:
-    target_river = st.selectbox("河川を選択してください", list(RIVERS.keys()))
+    target_river = st.selectbox("河川を選択", list(RIVERS.keys()))
 with col_sel2:
     today_date = datetime.date.today()
-    target_date = st.date_input(
-        "釣行予定日を選択",
-        today_date,
-        min_value=today_date - datetime.timedelta(days=7),
-        max_value=today_date + datetime.timedelta(days=5),
-    )
+    target_date = st.date_input("釣行予定日", today_date, min_value=today_date - datetime.timedelta(days=7), max_value=today_date + datetime.timedelta(days=5))
+with col_sel3:
+    default_base = RIVERS[target_river]["base_level"]
+    adjusted_base_level = st.number_input("基準水位の微調整(m)", value=default_base, step=0.01)
 
+RIVERS[target_river]["base_level"] = adjusted_base_level
 river_info = RIVERS[target_river]
 
-current_actual, fetch_source = fetch_weather_water_level(
-    river_info["weather_url"], river_info["default_actual"]
-)
-
+current_actual, fetch_source = fetch_weather_water_level(river_info["weather_url"], river_info["default_actual"])
 now_hour_str = pd.Timestamp.now().strftime("%Y-%m-%d %H:00")
 save_water_history(target_river, now_hour_str, current_actual)
 
-df_weather, is_weather_live = fetch_weather_data(
-    river_info["lat"], river_info["lon"]
-)
+df_weather, is_weather_live = fetch_weather_data(river_info["lat"], river_info["lon"])
 user_logs = load_logs()
-res = analyze_condition(
-    df_weather,
-    is_weather_live,
-    river_info,
-    user_logs,
-    target_river,
-    target_date,
-    current_actual,
-)
+res = analyze_condition(df_weather, is_weather_live, river_info, user_logs, target_river, target_date, current_actual)
 
-col_caption1, col_caption2 = st.columns([3, 1])
-with col_caption1:
-    st.caption(
-        f"観測所: {river_info['station_name']}（{river_info['river_system']}） /"
-        f" 基準水位線: {river_info['base_level']:.2f}m / 現在実測値:"
-        f" {current_actual:.2f}m ({fetch_source}) [学習減衰率:"
-        f" {res['learned_decay']:.4f} / 水温バイアス:"
-        f" {res['learned_temp_bias']:+.1f}℃]"
-    )
-with col_caption2:
-    if river_info["weather_url"]:
-        st.markdown(f"[ウェザーニュースページ]({river_info['weather_url']})")
-
-if not res["has_precipitation_data"]:
-    st.warning(
-        "⚠️"
-        " 選択された日程の信頼できる降水データがありません（予報範囲外または通信エラー）。水位シミュレーションは降水量を0として計算しています。"
-    )
+st.caption(f"観測所: {river_info['station_name']} / 基準水位設定: {river_info['base_level']:.2f}m / 現在実測値: {current_actual:.2f}m ({fetch_source})")
 
 st.markdown("---")
-
-if target_date == today_date:
-    st.subheader("本日のコンディション予測")
-else:
-    st.subheader(
-        f"{target_date.strftime('%Y年%m月%d日')} のコンディション事前予測"
-    )
-
-stars = "★" * res["score"] + "☆" * (10 - res["score"])
-st.markdown(f"### 釣行日おすすめ度 : {stars} （{res['score']} / 10）")
-
-col_alert1, col_alert2 = st.columns(2)
-with col_alert1:
-    st.info(f"増水・全飛びリスク: {res['flood_risk']}")
-with col_alert2:
-    if (
-        "⚠️" in res["moss_alert"]
-        or "🚫" in res["moss_alert"]
-        or "🟡" in res["moss_alert"]
-    ):
-        st.warning(f"コンディション: {res['moss_alert']}")
-    else:
-        st.success(f"コンディション: {res['moss_alert']}")
-
-if res["level_diff"] >= 0.50:
-    st.error(
-        "大増水（釣り困難）: 基準水位より"
-        f" +{res['level_diff']*100:.0f}cm と大幅な増水が予想されます。"
-    )
-elif res["level_diff"] >= 0.30:
-    st.warning(
-        "高水注意: 基準水位より"
-        f" +{res['level_diff']*100:.0f}cm 高めです。"
-    )
-
-if res["max_wind"] >= 6.0:
-    st.error(f"強風注意: 予想最大風速 {res['max_wind']:.1f} m/s")
+st.subheader("コンディション予測")
+st.markdown(f"釣行日おすすめ度 : {res['score']} / 10")
 
 col1, col2, col3, col4, col5, col6 = st.columns(6)
-
-if target_date > today_date:
-    level_trend_display = (
-        f"{res['level_trend']}\n\n※水位は降水予報を見て表示している予測です"
-    )
-else:
-    level_trend_display = res["level_trend"]
-
-col1.metric("水位状況", f"{res['water_level']:.2f} m", level_trend_display)
+col1.metric("水位状況", f"{res['water_level']:.2f} m", res["level_trend"])
 col2.metric("天気", res["weather_desc"])
-col3.metric("予想気温", f"{res['temp_max']:.1f}℃", f"最低 {res['temp_min']:.1f}℃")
-col4.metric(
-    "推計水温",
-    f"{res['water_temp_max']:.1f}℃",
-    f"平均 {res['water_temp_avg']:.1f}℃",
-)
-col5.metric("ハミ垢生育度", f"{res['moss_growth']} %")
-col6.metric("最大風速", f"{res['max_wind']:.1f} m/s")
+col3.metric("気温", f"{res['temp_max']:.1f}℃", f"最低 {res['temp_min']:.1f}℃")
+col4.metric("水温", f"{res['water_temp_max']:.1f}℃", f"平均 {res['water_temp_avg']:.1f}℃")
+col5.metric("ハミ垢", f"{res['moss_growth']} %")
+col6.metric("風速", f"{res['max_wind']:.1f} m/s")
 
-if target_date > today_date:
-    st.caption("※水位は降水予報を見て表示している予測です")
-
-st.markdown(
-    f"### 🌊 大水（＋50cm目安）からの経過日数: **{res['days_since_flood']} 日**"
-)
-st.write(f"濁り・澄み具合予測: {res['clarity_recovery']}")
-st.caption(f"※ 垢育成シーズンモード: {res['season_mode']}")
+st.write(f"大水からの経過日数: {res['days_since_flood']} 日 / 濁り予測: {res['clarity_recovery']} / アラート: {res['moss_alert']}")
 
 st.markdown("---")
-st.subheader(
-    f"{target_date.strftime('%m月%d日')} の1時間ごとのピンポイント天気予報"
-)
+st.subheader("過去の水位履歴データ")
+water_hist = load_water_history()
+if water_hist and target_river in water_hist:
+    hist_df = pd.DataFrame(list(water_hist[target_river].items()), columns=["記録日時", "水位(m)"])
+    hist_df["記録日時"] = pd.to_datetime(hist_df["記録日時"])
+    hist_df = hist_df.sort_values("記録日時", ascending=False).reset_index(drop=True)
+    st.dataframe(hist_df, use_container_width=True)
+else:
+    st.info("過去の水位記録がありません。")
 
-if not res["target_df"].empty:
-    df_hourly_view = res["target_df"].copy()
-    df_hourly_view["時刻"] = df_hourly_view["time"].dt.strftime("%H:00")
-    df_hourly_view["天気"] = df_hourly_view["weathercode"].apply(get_weather_desc)
-    df_hourly_view["気温(℃)"] = df_hourly_view["temperature_2m"].round(1)
-    df_hourly_view["降水量(mm)"] = df_hourly_view["precipitation"].round(1)
-    df_hourly_view["風速(m/s)"] = df_hourly_view["windspeed_10m"].round(1)
-
-    table_df = df_hourly_view[
-        ["時刻", "天気", "気温(℃)", "降水量(mm)", "風速(m/s)"]
-    ].set_index("時刻")
-    st.dataframe(table_df.T, use_container_width=True)
 st.markdown("---")
-st.subheader("水位グラフ（基準水位線 & 蓄積データ・天気予報予測）")
-
-graph_range = st.radio(
-    "グラフの表示期間を選択してください",
-    options=["直近2日間 + 予測", "直近1週間 + 予測"],
-    horizontal=True,
-)
-
+st.subheader("水位グラフ")
+graph_range = st.radio("グラフ表示期間", ["直近2日間", "直近1週間"], horizontal=True)
 if not res["df_hydro"].empty and "time" in res["df_hydro"].columns:
-    past_days = 7 if graph_range == "直近1週間 + 予測" else 2
-    start_time = pd.to_datetime(
-        datetime.date.today() - datetime.timedelta(days=past_days)
-    )
+    past_days = 7 if graph_range == "直近1週間" else 2
+    start_time = pd.to_datetime(datetime.date.today() - datetime.timedelta(days=past_days))
     end_time = pd.to_datetime(target_date + datetime.timedelta(days=1))
-
-    chart_hydro = res["df_hydro"][
-        (res["df_hydro"]["time"] >= start_time)
-        & (res["df_hydro"]["time"] < end_time)
-    ].copy()
-
-    now_ts = pd.Timestamp.now().floor("h")
-    past_data_subset = chart_hydro[chart_hydro["time"] <= now_ts]
-    has_past_actual = past_data_subset["simulated_level"].notna().any()
-
-    if not has_past_actual and not chart_hydro.empty:
-        st.info("過去の計測実績データがないため、グラフは表示されません。")
-    elif not chart_hydro.empty:
-        chart_hydro["水位(実績・予測)(m)"] = chart_hydro["simulated_level"]
+    chart_hydro = res["df_hydro"][(res["df_hydro"]["time"] >= start_time) & (res["df_hydro"]["time"] < end_time)].copy()
+    if not chart_hydro.empty:
+        chart_hydro["水位(m)"] = chart_hydro["simulated_level"]
         chart_hydro["時間"] = chart_hydro["time"].dt.strftime("%m/%d %H時")
         chart_hydro = chart_hydro.rename(columns={"base_level": "基準水位線(m)"})
-
-        min_val = chart_hydro[["水位(実績・予測)(m)", "基準水位線(m)"]].min().min()
-        max_val = chart_hydro[["水位(実績・予測)(m)", "基準水位線(m)"]].max().max()
-        padding = 0.1 
-
-        hydro_melt = chart_hydro.melt(
-            id_vars=["時間"],
-            value_vars=["水位(実績・予測)(m)", "基準水位線(m)"],
-            var_name="凡例",
-            value_name="水位"
-        )
-        
-        hydro_chart = (
-            alt.Chart(hydro_melt)
-            .mark_line(strokeWidth=2)
-            .encode(
-                x=alt.X("時間:N", sort=None, axis=alt.Axis(labelAngle=-45)),
-                y=alt.Y("水位:Q", scale=alt.Scale(domain=[min_val - padding, max_val + padding])),
-                color=alt.Color("凡例:N", legend=alt.Legend(title=None, orient="bottom")),
-                tooltip=["時間", "凡例", "水位"]
-            )
-            .properties(height=300)
-        )
+        min_val, max_val = chart_hydro[["水位(m)", "基準水位線(m)"]].min().min(), chart_hydro[["水位(m)", "基準水位線(m)"]].max().max()
+        hydro_melt = chart_hydro.melt(id_vars=["時間"], value_vars=["水位(m)", "基準水位線(m)"], var_name="凡例", value_name="水位")
+        hydro_chart = alt.Chart(hydro_melt).mark_line(strokeWidth=2).encode(
+            x=alt.X("時間:N", sort=None), y=alt.Y("水位:Q", scale=alt.Scale(domain=[min_val - 0.1, max_val + 0.1])),
+            color="凡例:N", tooltip=["時間", "凡例", "水位"]
+        ).properties(height=300)
         st.altair_chart(hydro_chart, use_container_width=True)
-    else:
-        st.info("指定期間のグラフデータがありません。")
 
 st.markdown("---")
-st.subheader("釣行日の水温推移 & 5段階活性判定（色分けグラフ）")
-
-temp_data = res["hourly_water_temp"]
-hours = [f"{i:02d}:00" for i in range(24)]
-
-
-def get_water_temp_status(t):
-    if t < 16.0:
-        return "① 低水温（〜15.9℃）"
-    elif t < 18.0:
-        return "② やや低め（16.0〜17.9℃）"
-    elif t < 20.0:
-        return "③ 活性上向き（18.0〜19.9℃）"
-    elif t < 24.0:
-        return "④ ベスト時合（20.0〜23.9℃）"
-    else:
-        return "⑤ 高水温注意（24.0℃〜）"
-
-
-statuses = [get_water_temp_status(t) for t in temp_data]
-chart_df = pd.DataFrame(
-    {"時刻": hours, "推計水温(℃)": temp_data, "段階": statuses}
-)
-
-color_scale = alt.Scale(
-    domain=[
-        "① 低水温（〜15.9℃）",
-        "② やや低め（16.0〜17.9℃）",
-        "③ 活性上向き（18.0〜19.9℃）",
-        "④ ベスト時合（20.0〜23.9℃）",
-        "⑤ 高水温注意（24.0℃〜）",
-    ],
-    range=["#3498db", "#5dade2", "#2ecc71", "#e67e22", "#e74c3c"],
-)
-
-chart_line = (
-    alt.Chart(chart_df)
-    .mark_line(interpolate="monotone", strokeWidth=3)
-    .encode(
-        x=alt.X("時刻:N", sort=None, axis=alt.Axis(labelAngle=0)),
-        y=alt.Y("推計水温(℃):Q", scale=alt.Scale(domain=[10, 30])),
-    )
-)
-
-chart_points = (
-    alt.Chart(chart_df)
-    .mark_circle(size=100)
-    .encode(
-        x=alt.X("時刻:N", sort=None),
-        y=alt.Y("推計水温(℃):Q"),
-        color=alt.Color(
-            "段階:N",
-            scale=color_scale,
-            legend=alt.Legend(
-                title="水温・活性段階",
-                orient="bottom", 
-                columns=2         
-            ),
-        ),
-        tooltip=["時刻", "推計水温(℃)", "段階"],
-    )
-)
-
-chart_temp = (chart_line + chart_points).properties(height=300)
-st.altair_chart(chart_temp, use_container_width=True)
-
-status_summary = {}
-for h, t, s in zip(hours, temp_data, statuses):
-    if s not in status_summary:
-        status_summary[s] = []
-    status_summary[s].append(int(h.split(":")[0]))
-
-for s in [
-    "① 低水温（〜15.9℃）",
-    "② やや低め（16.0〜17.9℃）",
-    "③ 活性上向き（18.0〜19.9℃）",
-    "④ ベスト時合（20.0〜23.9℃）",
-    "⑤ 高水温注意（24.0℃〜）",
-]:
-    if s in status_summary and status_summary[s]:
-        hrs = status_summary[s]
-        start_h, end_h = min(hrs), max(hrs)
-        time_str = (
-            f"{start_h:02d}:00 ～ {(end_h+1)%24:02d}:00"
-            if start_h != end_h
-            else f"{start_h:02d}:00"
-        )
-
-        if "①" in s:
-            st.info(f"{s}: {time_str}")
-        elif "②" in s:
-            st.info(f"{s}: {time_str}")
-        elif "③" in s:
-            st.success(f"{s}: {time_str}")
-        elif "④" in s:
-            st.warning(f"{s}: {time_str} ⭐おすすめ")
-        elif "⑤" in s:
-            st.error(f"{s}: {time_str}")
-
-st.markdown("---")
-
-st.subheader("🌡️ 現地水温データの記録（1時間ごと等・単体保存）")
-
+st.subheader("各種ログ保存")
 with st.form("water_temp_form"):
-    col_wt1, col_wt2 = st.columns(2)
-    with col_wt1:
-        wt_date = st.date_input("測定日", today_date, key="wt_date")
-    with col_wt2:
-        river_keys = list(RIVERS.keys())
-        default_index = (
-            river_keys.index(target_river) if target_river in river_keys else 0
-        )
-        selected_wt_river = st.selectbox(
-            "測定河川", river_keys, index=default_index, key="wt_river"
-        )
-
-    col_wt3, col_wt4 = st.columns(2)
-    with col_wt3:
-        measured_water_temp = st.number_input(
-            "実際の水温（℃）",
-            min_value=0.0,
-            max_value=35.0,
-            value=16.0,
-            step=0.1,
-        )
-    with col_wt4:
-        measured_water_temp_time = st.time_input(
-            "水温を測った時間",
-            value=datetime.datetime.now().time().replace(minute=0, second=0, microsecond=0),
-        )
-
-    submitted_wt = st.form_submit_button("水温データを保存する")
-    if submitted_wt:
-        wt_entry = {
-            "date": str(wt_date),
-            "river": selected_wt_river,
-            "measured_water_temp": measured_water_temp,
-            "water_temp_time": measured_water_temp_time.strftime("%H:%M"),
-        }
-        save_water_temp_log(wt_entry)
-        st.success("水温データを保存しました！（AIの水温バイアス学習に反映）")
+    c1, c2, c3 = st.columns(3)
+    wt_date = c1.date_input("水温測定日", today_date)
+    wt_val = c2.number_input("実測水温(℃)", value=16.0, step=0.1)
+    wt_time = c3.time_input("測定時間")
+    if st.form_submit_button("水温保存"):
+        save_water_temp_log({"date": str(wt_date), "river": target_river, "measured_water_temp": wt_val, "water_temp_time": wt_time.strftime("%H:%M")})
         st.rerun()
-
-water_temp_logs = load_water_temp_logs()
-if water_temp_logs:
-    with st.expander("保存された水温データの確認・削除"):
-        for idx, log in enumerate(water_temp_logs):
-            c1, c2, c3, c4, c5 = st.columns([2, 3, 2, 2, 1])
-            c1.write(f"{log.get('date')}")
-            c2.write(f"{log.get('river', '未設定')}")
-            c3.write(f"{log.get('measured_water_temp')}℃")
-            c4.write(f"{log.get('water_temp_time', '-')}")
-            if c5.button("削除", key=f"del_wt_{idx}"):
-                delete_water_temp_log(idx)
-                st.success("水温データを削除しました。")
-                st.rerun()
-
-st.markdown("---")
-
-st.subheader("🎣 実釣ログの記録（釣果・ハミ垢・AI学習用）")
 
 with st.form("log_form"):
-    col_log1, col_log2 = st.columns(2)
-    with col_log1:
-        log_date = st.date_input("釣行日", today_date, key="log_date")
-    with col_log2:
-        river_keys = list(RIVERS.keys())
-        default_index = (
-            river_keys.index(target_river) if target_river in river_keys else 0
-        )
-        selected_log_river = st.selectbox(
-            "釣行河川", river_keys, index=default_index, key="log_river"
-        )
-
-    catch_count = st.number_input("釣果（匹）", min_value=0, max_value=200, value=10)
-
-    st.markdown("---")
-    moss_condition = st.select_slider(
-        "実際のハミ垢の状況",
-        options=[
-            "全飛直後（白）",
-            "薄っすら新垢",
-            "ベスト（食み痕多数）",
-            "垢腐り・泥垢",
-        ],
-        value="ベスト（食み痕多数）",
-    )
-
-    feedback_map = {
-        "全飛直後（白）": -2,
-        "薄っすら新垢": -1,
-        "ベスト（食み痕多数）": 0,
-        "垢腐り・泥垢": 1,
-    }
-
-    submitted = st.form_submit_button("実釣データを保存してAIに学習させる")
-    if submitted:
-        log_entry = {
-            "date": str(log_date),
-            "river": selected_log_river,
-            "catch": catch_count,
-            "moss_condition": moss_condition,
-            "moss_feedback": feedback_map[moss_condition],
-        }
-        save_log(log_entry)
-        st.success("実釣ログを保存しました！（垢状態のAI学習に反映）")
+    c1, c2 = st.columns(2)
+    log_date = c1.date_input("釣行日", today_date)
+    catch_cnt = c2.number_input("釣果", value=10)
+    moss = st.select_slider("垢状況", ["全飛直後", "薄っすら新垢", "ベスト", "垢腐り"], "ベスト")
+    feedback = {"全飛直後": -2, "薄っすら新垢": -1, "ベスト": 0, "垢腐り": 1}
+    if st.form_submit_button("釣果保存"):
+        save_log({"date": str(log_date), "river": target_river, "catch": catch_cnt, "moss_condition": moss, "moss_feedback": feedback[moss]})
         st.rerun()
-
-if user_logs:
-    with st.expander("下記の実釣ログを確認・削除"):
-        for idx, log in enumerate(user_logs):
-            c1, c2, c3, c4, c5 = st.columns([2, 3, 2, 3, 1])
-            c1.write(f"{log.get('date')}")
-            c2.write(f"{log.get('river', '未設定')}")
-            c3.write(f"{log.get('catch')} 匹")
-            c4.write(f"{log.get('moss_condition')}")
-            if c5.button("削除", key=f"del_{idx}"):
-                delete_log(idx)
-                st.success("ログを削除しました。")
-                st.rerun()
