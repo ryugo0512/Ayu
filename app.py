@@ -351,10 +351,12 @@ if not res["df_hydro"].empty and "time" in res["df_hydro"].columns:
 st.markdown("---")
 st.subheader("水温グラフ & 活性予測")
 if not res["df_hydro"].empty and "time" in res["df_hydro"].columns and "estimated_water_temp" in res["df_hydro"].columns:
-    past_days = 7 if graph_range == "直近1週間" else 2
-    start_time = pd.to_datetime(datetime.date.today() - datetime.timedelta(days=past_days))
+    # 変更: 開始時間を「当日の0時」に固定し、ラジオボタンの影響を受けないようにする
+    start_time = pd.to_datetime(datetime.date.today())
     end_time = pd.to_datetime(target_date + datetime.timedelta(days=1))
+    
     chart_temp = res["df_hydro"][(res["df_hydro"]["time"] >= start_time) & (res["df_hydro"]["time"] < end_time)].copy()
+    
     if not chart_temp.empty:
         chart_temp["推定水温(℃)"] = chart_temp["estimated_water_temp"]
         chart_temp["時間"] = chart_temp["time"].dt.strftime("%m/%d %H時")
@@ -363,6 +365,23 @@ if not res["df_hydro"].empty and "time" in res["df_hydro"].columns and "estimate
             tooltip=["時間", "推定水温(℃)"]
         ).properties(height=250)
         st.altair_chart(temp_chart, use_container_width=True)
+
+    # 釣行日の時間帯ごとの水温から活性化のタイミングを算出して表示
+    if not res["target_df"].empty and "estimated_water_temp" in res["target_df"].columns:
+        t_df = res["target_df"].copy()
+        t_df["hour"] = t_df["time"].dt.hour
+        temps = t_df["estimated_water_temp"].tolist()
+        hours = t_df["hour"].tolist()
+        
+        # 活性が上がる目安（例: 15℃以上または最高水温の帯）を抽出
+        active_hours = [h for h, temp in zip(hours, temps) if temp >= 15.0]
+        if active_hours:
+            first_active = min(active_hours)
+            peak_temp = max(temps)
+            peak_hour = hours[temps.index(peak_temp)]
+            st.info(f"【水温・活性予測】釣行日は **{first_active}時頃** から水温が15℃を超えて活性が上がり始め、**{peak_hour}時頃** に最高水温 **{peak_temp:.1f}℃** に達する予測です。（AI学習バイアス補正: {res['learned_temp_bias']:+.1f}℃）")
+        else:
+            st.warning(f"【水温・活性予測】釣行日は全体的に水温が低め（最高 {max(temps):.1f}℃）の予測です。日中の温かい時間帯を狙うのが有効です。（AI学習バイアス補正: {res['learned_temp_bias']:+.1f}℃）")
 
     # 釣行日の時間帯ごとの水温から活性化のタイミングを算出して表示
     if not res["target_df"].empty and "estimated_water_temp" in res["target_df"].columns:
