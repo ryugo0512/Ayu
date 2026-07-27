@@ -147,22 +147,36 @@ def fetch_weather_water_level(url, default_val):
             res = requests.get(url, headers=headers, timeout=3)
             res.raise_for_status()
             clean_text = " ".join(re.sub(r"<[^>]+>", " ", res.text).split())
-            match = re.search(r"現在水位\s*(\d+\.\d{2})\s*m", clean_text)
-            if match: return float(match.group(1)), "自動取得"
-            match = re.search(r"\d{1,2}:\d{2}\s*時点\s*(\d+\.\d{2})\s*m", clean_text)
-            if match: return float(match.group(1)), "自動取得"
-            match = re.search(r"時点\s*(\d+\.\d{2})\s*m", clean_text)
-            if match: return float(match.group(1)), "自動取得"
-            matches = re.findall(r"(\d+\.\d{2})\s*m", clean_text)
-            if matches:
-                for m_str in matches:
-                    val = float(m_str)
-                    if 0.001 < abs(val - default_val) <= 3.0: return val, "自動取得"
-                return float(matches[0]), "自動取得"
-            return default_val, "デフォルト(未検出)"
+            
+            extracted_val = None
+            for pat in [r"現在水位\s*(\d+\.\d{2})\s*m", r"\d{1,2}:\d{2}\s*時点\s*(\d+\.\d{2})\s*m", r"時点\s*(\d+\.\d{2})\s*m"]:
+                match = re.search(pat, clean_text)
+                if match:
+                    extracted_val = float(match.group(1))
+                    break
+            
+            if extracted_val is None:
+                matches = re.findall(r"(\d+\.\d{2})\s*m", clean_text)
+                if matches:
+                    for m_str in matches:
+                        val = float(m_str)
+                        if abs(val - default_val) <= 1.0:
+                            extracted_val = val
+                            break
+                    if extracted_val is None:
+                        extracted_val = float(matches[0])
+            
+            if extracted_val is not None:
+                if abs(extracted_val - default_val) <= 1.0:
+                    return extracted_val, "自動取得"
+                else:
+                    return default_val, "エラー(異常値検知)"
+            
+            return default_val, "エラー(未検出)"
         except Exception:
             if attempt == 0: time.sleep(2)
-    return default_val, "デフォルト(通信エラー)"
+    return default_val, "エラー(通信エラー)"
+
 @st.cache_data(ttl=3600)
 def fetch_weather_data(lat, lon):
     url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=temperature_2m,precipitation,weathercode,sunshine_duration,shortwave_radiation,windspeed_10m&windspeed_unit=ms&past_days=7&forecast_days=16&timezone=Asia%2FTokyo"
@@ -293,6 +307,7 @@ def analyze_condition(df_weather, is_weather_live, river_info, user_logs, target
         "water_temp_max": water_temp_max, "water_temp_avg": water_temp_avg, "max_wind": max_wind, "level_diff": level_diff,
         "has_precipitation_data": ("precipitation" in df_weather.columns), "learned_decay": river_decay_rate, "learned_temp_bias": temp_bias
     }
+
 st.title("北海道 鮎コンディション判定")
 
 col_sel1, col_sel2 = st.columns(2)
@@ -351,12 +366,9 @@ if not res["df_hydro"].empty and "time" in res["df_hydro"].columns:
 st.markdown("---")
 st.subheader("水温グラフ & 活性予測")
 if not res["df_hydro"].empty and "time" in res["df_hydro"].columns and "estimated_water_temp" in res["df_hydro"].columns:
-    # 変更: 開始時間を「当日の0時」に固定し、ラジオボタンの影響を受けないようにする
     start_time = pd.to_datetime(datetime.date.today())
     end_time = pd.to_datetime(target_date + datetime.timedelta(days=1))
-    
     chart_temp = res["df_hydro"][(res["df_hydro"]["time"] >= start_time) & (res["df_hydro"]["time"] < end_time)].copy()
-    
     if not chart_temp.empty:
         chart_temp["推定水温(℃)"] = chart_temp["estimated_water_temp"]
         chart_temp["時間"] = chart_temp["time"].dt.strftime("%m/%d %H時")
@@ -366,31 +378,12 @@ if not res["df_hydro"].empty and "time" in res["df_hydro"].columns and "estimate
         ).properties(height=250)
         st.altair_chart(temp_chart, use_container_width=True)
 
-    # 釣行日の時間帯ごとの水温から活性化のタイミングを算出して表示
     if not res["target_df"].empty and "estimated_water_temp" in res["target_df"].columns:
         t_df = res["target_df"].copy()
         t_df["hour"] = t_df["time"].dt.hour
         temps = t_df["estimated_water_temp"].tolist()
         hours = t_df["hour"].tolist()
         
-        # 活性が上がる目安（例: 15℃以上または最高水温の帯）を抽出
-        active_hours = [h for h, temp in zip(hours, temps) if temp >= 15.0]
-        if active_hours:
-            first_active = min(active_hours)
-            peak_temp = max(temps)
-            peak_hour = hours[temps.index(peak_temp)]
-            st.info(f"【水温・活性予測】釣行日は **{first_active}時頃** から水温が15℃を超えて活性が上がり始め、**{peak_hour}時頃** に最高水温 **{peak_temp:.1f}℃** に達する予測です。（AI学習バイアス補正: {res['learned_temp_bias']:+.1f}℃）")
-        else:
-            st.warning(f"【水温・活性予測】釣行日は全体的に水温が低め（最高 {max(temps):.1f}℃）の予測です。日中の温かい時間帯を狙うのが有効です。（AI学習バイアス補正: {res['learned_temp_bias']:+.1f}℃）")
-
-    # 釣行日の時間帯ごとの水温から活性化のタイミングを算出して表示
-    if not res["target_df"].empty and "estimated_water_temp" in res["target_df"].columns:
-        t_df = res["target_df"].copy()
-        t_df["hour"] = t_df["time"].dt.hour
-        temps = t_df["estimated_water_temp"].tolist()
-        hours = t_df["hour"].tolist()
-        
-        # 活性が上がる目安（例: 15℃以上または最高水温の帯）を抽出
         active_hours = [h for h, temp in zip(hours, temps) if temp >= 15.0]
         if active_hours:
             first_active = min(active_hours)
