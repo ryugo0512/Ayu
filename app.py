@@ -413,3 +413,41 @@ with st.form("log_form"):
     if st.form_submit_button("釣果保存"):
         save_log({"date": str(log_date), "river": target_river, "catch": catch_cnt, "moss_condition": moss, "moss_feedback": feedback[moss]})
         st.rerun()
+
+st.markdown("---")
+st.subheader("保存データ履歴")
+tab_fish, tab_temp = st.tabs(["釣果ログ", "水温ログ"])
+
+with tab_fish:
+    f_logs = load_logs()
+    if f_logs:
+        df_fish = pd.DataFrame(f_logs)
+        st.dataframe(df_fish, use_container_width=True)
+        col_del1, col_del2 = st.columns([3, 1])
+        with col_del1:
+            del_f_idx = st.number_input("削除する釣果ログのインデックス（表の左端の番号）", min_value=0, max_value=len(f_logs)-1, step=1, key="del_f")
+        with col_del2:
+            st.write("")
+            st.write("")
+            if st.button("釣果ログを削除"):
+                delete_log(del_f_idx)
+                st.rerun()
+    else:
+        st.info("保存された釣果ログはありません。")
+
+with tab_temp:
+    t_logs = load_water_temp_logs()
+    if t_logs:
+        df_temp = pd.DataFrame(t_logs)
+        st.dataframe(df_temp, use_container_width=True)
+        col_del3, col_del4 = st.columns([3, 1])
+        with col_del3:
+            del_t_idx = st.number_input("削除する水温ログのインデックス（表の左端の番号）", min_value=0, max_value=len(t_logs)-1, step=1, key="del_t")
+        with col_del4:
+            st.write("")
+            st.write("")
+            if st.button("水温ログを削除"):
+                delete_water_temp_log(del_t_idx)
+                st.rerun()
+    else:
+        st.info("保存された水温ログはありません。")
