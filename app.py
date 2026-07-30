@@ -472,9 +472,10 @@ st.caption("※GitHub上の蓄積水位データおよびユーザーの手入�
 
 st.markdown("---")
 st.subheader("水位グラフ")
-graph_range = st.radio("グラフ表示期間", ["直近2日間", "直近1週間"], horizontal=True)
+graph_range = st.radio("グラフ表示期間", ["直近2日間", "直近1週間", "直近2週間"], horizontal=True)
 if not res["df_hydro"].empty and "time" in res["df_hydro"].columns:
-    past_days = 7 if graph_range == "直近1週間" else 2
+    days_map = {"直近2日間": 2, "直近1週間": 7, "直近2週間": 14}
+    past_days = days_map.get(graph_range, 2)
     start_time = pd.to_datetime(get_jst_now().date() - datetime.timedelta(days=past_days))
     end_time = pd.to_datetime(target_date + datetime.timedelta(days=1))
     chart_hydro = res["df_hydro"][(res["df_hydro"]["time"] >= start_time) & (res["df_hydro"]["time"] < end_time)].copy()
