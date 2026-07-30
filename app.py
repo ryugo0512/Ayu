@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import requests
 import streamlit as st
+from PIL import Image, ExifTags
 
 st.set_page_config(page_title="北海道 鮎コンディション判定", page_icon="🐟", layout="wide")
 
@@ -58,6 +59,22 @@ def delete_water_temp_log(index):
     if 0 <= index < len(logs):
         logs.pop(index)
         save_water_temp_logs(logs)
+
+def get_exif_datetime(uploaded_file):
+    try:
+        image = Image.open(uploaded_file)
+        exif = image._getexif()
+        if exif is not None:
+            for tag, value in exif.items():
+                decoded = ExifTags.TAGS.get(tag, tag)
+                if decoded == "DateTimeOriginal":
+                    try:
+                        return datetime.datetime.strptime(value, '%Y:%m:%d %H:%M:%S')
+                    except Exception:
+                        pass
+        return None
+    except Exception:
+        return None
 
 @st.cache_data(ttl=900)
 def load_water_history():
@@ -272,24 +289,30 @@ def analyze_condition(df_weather, is_weather_live, river_info, user_logs, target
     adjusted_temp_base = river_info["temp_base"] + 2.0 * np.sin(2 * np.pi * (day_of_year - 170) / 365)
     temp_col = "temperature_2m" if "temperature_2m" in df_weather.columns else df_weather.columns[1]
     df_weather["estimated_water_temp"] = np.minimum(adjusted_temp_base + (df_weather[temp_col] * river_info["temp_factor"]) + temp_bias, river_info["max_temp"])
+    
     target_df = df_weather[df_weather["time"].dt.date == target_date].copy() if "time" in df_weather.columns else pd.DataFrame()
     df_past = df_weather[df_weather["time"] <= target_datetime].copy() if "time" in df_weather.columns else df_weather.copy()
+    
     if "precipitation" in df_past.columns:
         df_past["rain_12h"] = df_past["precipitation"].rolling(12, min_periods=1).sum()
         heavy_events = df_past[(df_past["precipitation"] >= 30.0) | (df_past["rain_12h"] >= 60.0)]
         days_since_flood = (target_datetime - heavy_events["time"].max()).days if not heavy_events.empty else 10
     else:
         days_since_flood = 10
+        
     recent_rain = df_past.tail(24)["precipitation"].sum() if "precipitation" in df_past.columns else 0.0
     clarity_recovery = "強濁り" if recent_rain > 60 else "笹濁り" if recent_rain > 30 else "清澄"
     clarity_score = 1 if recent_rain > 60 else 2 if recent_rain > 30 else 3
+    
     m, d = target_date.month, target_date.day
     if m == 7 and d <= 15: season_mode, growth_rate = "初期", 9.0
     elif (m == 7 and d > 15) or (m == 8 and d <= 15): season_mode, growth_rate = "盛期", 12.5
     elif m == 8 and d > 15: season_mode, growth_rate = "晩夏", 10.0
     else: season_mode, growth_rate = "終盤", 7.0
+    
     recent_rad = df_past.tail(max(24, days_since_flood * 24))["shortwave_radiation"].mean() if "shortwave_radiation" in df_past.columns else 150.0
     moss_growth = min(100, int((days_since_flood * growth_rate * max(0.7, min(1.3, recent_rad / 180.0))) * (1.0 + bias_growth)))
+    
     if not target_df.empty and len(target_df) >= 24:
         hourly_water_temp = target_df["estimated_water_temp"].tolist()[:24]
         display_water_level = current_actual if target_date == get_jst_now().date() else target_df["simulated_level"].mean()
@@ -301,32 +324,95 @@ def analyze_condition(df_weather, is_weather_live, river_info, user_logs, target
         hourly_water_temp = [14.0 + (i if i <= 14 else 28 - i) * 0.3 for i in range(24)]
         display_water_level = current_actual
         weather_desc, temp_max, temp_min, water_temp_max, water_temp_avg, max_wind = "晴れ", 22.0, 16.0, 17.5, 15.8, 2.0
+        
     level_diff = display_water_level - effective_base
     if level_diff < -0.10: level_trend = f"渇水 ({level_diff*100:+.0f}cm)"
     elif level_diff <= 0.15: level_trend = f"平水 ({level_diff*100:+.0f}cm)"
     elif level_diff <= 0.40: level_trend = f"やや高水 ({level_diff*100:+.0f}cm)"
     else: level_trend = f"大増水 ({level_diff*100:+.0f}cm)"
+    
     if days_since_flood <= 1 or moss_growth < 20: moss_alert = "全飛び直後"
     elif days_since_flood <= 3 or moss_growth < 50: moss_alert = "垢付き始め"
     elif level_diff < -0.15 and days_since_flood > 10: moss_alert = "垢腐り注意"
     else: moss_alert = "新垢良好"
+    
     df_future = df_weather[df_weather["time"] >= target_datetime].head(24) if "time" in df_weather.columns else pd.DataFrame()
     fut_rain = df_future["precipitation"].sum() if "precipitation" in df_future.columns else 0.0
     flood_risk = "警戒" if fut_rain > 50.0 else "注意" if fut_rain > 25.0 else "安定"
+
+    # ========= スコアリングとロジック解説 =========
+    score_details = []
+    
+    moss_score = int((moss_growth / 100) * 4)
+    score_details.append(f"ハミ垢状況 ({moss_growth}%): +{moss_score}点")
+    score_details.append(f"濁り予測 ({clarity_recovery}): +{clarity_score}点")
+    
     temp_pts = 3 if len([t for t in hourly_water_temp if t >= 18.0]) >= 4 else (2 if len([t for t in hourly_water_temp if t >= 18.0]) >= 2 else 1)
-    raw_score = int((moss_growth / 100) * 4) + clarity_score + temp_pts
-    score = max(1, min(raw_score, 3 if days_since_flood <= 2 else 5 if days_since_flood <= 4 else 10))
-    if level_diff <= -0.30: score -= 3
-    elif level_diff <= -0.20: score -= 2
-    elif level_diff < 0: score -= 1
-    score = max(1, min(score, 1 if level_diff >= 0.50 else 3 if level_diff >= 0.30 else 7 if level_diff >= 0.15 else 10))
+    score_details.append(f"水温条件: +{temp_pts}点")
+    
+    raw_score = moss_score + clarity_score + temp_pts
+    score = raw_score
+    
+    if days_since_flood <= 2:
+        score = min(score, 3)
+        score_details.append("※大水直後 (垢飛び) のため上限3点")
+    elif days_since_flood <= 4:
+        score = min(score, 5)
+        score_details.append("※大水後 (垢付き始め) のため上限5点")
+
+    if level_diff <= -0.30: 
+        score -= 3
+        score_details.append("大渇水 (酸欠・警戒心増大): -3点")
+    elif level_diff <= -0.20: 
+        score -= 2
+        score_details.append("渇水: -2点")
+    elif level_diff < 0: 
+        score -= 1
+        score_details.append("やや減水: -1点")
+
+    # 曜日プレッシャー
+    weekday = target_date.weekday()
+    if weekday in [5, 6]:
+        score -= 1
+        score_details.append("休日プレッシャー (アングラー多数による場荒れ): -1点")
+    elif weekday in [0, 1]:
+        score -= 1
+        score_details.append("休日の場荒れ残り (警戒心高): -1点")
+    elif weekday in [3, 4]:
+        score += 1
+        score_details.append("プレッシャー回復 (釣り人減少・警戒心減): +1点")
+
+    # 引き水判定
+    if not df_past.empty and "simulated_level" in df_past.columns:
+        past_12h = df_past.tail(12)
+        if not past_12h.empty:
+            max_level_12h = past_12h["simulated_level"].max()
+            diff_from_max = max_level_12h - display_water_level
+            if 10 <= recent_rain <= 40 and diff_from_max > 0.05 and level_diff >= 0:
+                score += 2
+                score_details.append("適度な増水からの引き水 (鮎の動き・活性最大化): +2点")
+            elif diff_from_max > 0.05 and level_diff >= 0:
+                score += 1
+                score_details.append("引き水傾向 (縄張り意識向上): +1点")
+
+    final_score = max(1, min(score, 10))
+    if level_diff >= 0.50:
+        final_score = min(final_score, 1)
+        score_details.append("※大増水 (危険水位) のため上限1点")
+    elif level_diff >= 0.30:
+        final_score = min(final_score, 3)
+        score_details.append("※増水 (釣り困難) のため上限3点")
+    elif level_diff >= 0.15:
+        final_score = min(final_score, 7)
+        score_details.append("※やや高水 のため上限7点")
+        
     df_hydro = df_weather.copy()
     df_hydro["base_level"] = effective_base
     return {
         "water_level": display_water_level, "level_trend": level_trend, "days_since_flood": days_since_flood,
         "moss_growth": moss_growth, "moss_alert": moss_alert, "flood_risk": flood_risk, "clarity_recovery": clarity_recovery,
-        "season_mode": season_mode, "score": score, "hourly_water_temp": hourly_water_temp, "df_hydro": df_hydro,
-        "target_df": target_df, "weather_desc": weather_desc, "temp_max": temp_max, "temp_min": temp_min,
+        "season_mode": season_mode, "score": final_score, "score_details": score_details, "hourly_water_temp": hourly_water_temp, 
+        "df_hydro": df_hydro, "target_df": target_df, "weather_desc": weather_desc, "temp_max": temp_max, "temp_min": temp_min,
         "water_temp_max": water_temp_max, "water_temp_avg": water_temp_avg, "max_wind": max_wind, "level_diff": level_diff,
         "has_precipitation_data": ("precipitation" in df_weather.columns), "learned_decay": river_decay_rate, "learned_temp_bias": temp_bias
     }
@@ -352,7 +438,16 @@ st.caption(f"観測所: {river_info['station_name']} / 基準水位設定: {rive
 
 st.markdown("---")
 st.subheader("コンディション予測")
-st.markdown(f"釣行日おすすめ度 : {res['score']} / 10")
+
+# おすすめ度を赤字・大文字で強調
+st.markdown(f"<h2 style='text-align: center; color: #ff4b4b;'>釣行日おすすめ度 : {res['score']} / 10</h2>", unsafe_allow_html=True)
+
+# スコアリングロジックの可視化
+with st.expander("📝 スコア算出ロジック（加点・減点の理由を見る）", expanded=True):
+    for detail in res["score_details"]:
+        st.write(f"- {detail}")
+
+st.markdown("<br>", unsafe_allow_html=True)
 
 col1, col2, col3, col4, col5, col6 = st.columns(6)
 col1.metric("水位状況", f"{res['water_level']:.2f} m", res["level_trend"])
@@ -385,7 +480,6 @@ if not res["df_hydro"].empty and "time" in res["df_hydro"].columns:
         chart_hydro["予測水位(m)"] = chart_hydro.apply(lambda row: row["simulated_level"] if row["time"] >= now_h else np.nan, axis=1)
         chart_hydro = chart_hydro.rename(columns={"base_level": "基準水位線(m)"})
         
-        # グラフのY軸スケール設定（基準値を中心に -0.3m から +0.7m を固定確保。それ以上/以下は動的拡張）
         base_val = river_info["base_level"]
         y_min_fixed = base_val - 0.3
         y_max_fixed = base_val + 0.7
@@ -442,24 +536,53 @@ if not res["df_hydro"].empty and "time" in res["df_hydro"].columns and "estimate
 
 st.markdown("---")
 st.subheader("各種ログ保存（AI学習用データ入力）")
-with st.form("water_temp_form"):
-    c1, c2, c3 = st.columns(3)
-    wt_date = c1.date_input("水温測定日", today_date)
-    wt_val = c2.number_input("実測水温(℃)", value=16.0, step=0.1)
-    wt_time = c3.time_input("測定時間")
-    if st.form_submit_button("水温保存"):
-        save_water_temp_log({"date": str(wt_date), "river": target_river, "measured_water_temp": wt_val, "water_temp_time": wt_time.strftime("%H:%M")})
-        st.rerun()
 
-with st.form("log_form"):
-    c1, c2 = st.columns(2)
-    log_date = c1.date_input("釣行日", today_date)
-    catch_cnt = c2.number_input("釣果", value=10)
-    moss = st.select_slider("垢状況", ["全飛直後", "薄っすら新垢", "ベスト", "垢腐り"], "ベスト")
-    feedback = {"全飛直後": -2, "薄っすら新垢": -1, "ベスト": 0, "垢腐り": 1}
-    if st.form_submit_button("釣果保存"):
-        save_log({"date": str(log_date), "river": target_river, "catch": catch_cnt, "moss_condition": moss, "moss_feedback": feedback[moss]})
-        st.rerun()
+tab_photo, tab_manual = st.tabs(["📸 写真から自動記録", "✍️ 手動入力"])
+
+with tab_photo:
+    st.write("釣れた鮎の写真をアップロードすると、撮影時刻（EXIF）を読み取り、自動で釣果ログ（1匹）として保存します。")
+    uploaded_file = st.file_uploader("写真をアップロード", type=["jpg", "jpeg", "png"])
+    if st.button("写真からログを保存"):
+        if uploaded_file is not None:
+            dt_obj = get_exif_datetime(uploaded_file)
+            if dt_obj:
+                save_log({
+                    "date": dt_obj.strftime("%Y-%m-%d"),
+                    "time": dt_obj.strftime("%H:%M:%S"),
+                    "river": target_river,
+                    "catch": 1,
+                    "moss_condition": "自動記録",
+                    "moss_feedback": 0,
+                    "type": "photo_auto"
+                })
+                st.success(f"撮影時刻 {dt_obj.strftime('%Y-%m-%d %H:%M:%S')} の釣果を自動保存しました！")
+                st.rerun()
+            else:
+                st.error("写真から撮影時刻（EXIFデータ）を読み取れませんでした。手動入力をご利用ください。")
+        else:
+            st.warning("写真をアップロードしてください。")
+
+with tab_manual:
+    with st.form("water_temp_form"):
+        st.write("🌡️ 水温手動保存")
+        c1, c2, c3 = st.columns(3)
+        wt_date = c1.date_input("水温測定日", today_date)
+        wt_val = c2.number_input("実測水温(℃)", value=16.0, step=0.1)
+        wt_time = c3.time_input("測定時間")
+        if st.form_submit_button("水温保存"):
+            save_water_temp_log({"date": str(wt_date), "river": target_river, "measured_water_temp": wt_val, "water_temp_time": wt_time.strftime("%H:%M")})
+            st.rerun()
+
+    with st.form("log_form"):
+        st.write("🐟 釣果手動保存")
+        c1, c2 = st.columns(2)
+        log_date = c1.date_input("釣行日", today_date)
+        catch_cnt = c2.number_input("釣果", value=10)
+        moss = st.select_slider("垢状況", ["全飛直後", "薄っすら新垢", "ベスト", "垢腐り"], "ベスト")
+        feedback = {"全飛直後": -2, "薄っすら新垢": -1, "ベスト": 0, "垢腐り": 1}
+        if st.form_submit_button("釣果保存"):
+            save_log({"date": str(log_date), "river": target_river, "catch": catch_cnt, "moss_condition": moss, "moss_feedback": feedback[moss], "type": "manual"})
+            st.rerun()
 
 st.markdown("---")
 st.subheader("保存データ履歴")
