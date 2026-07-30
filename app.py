@@ -223,7 +223,7 @@ def fetch_weather_water_level(url, default_val):
 
 @st.cache_data(ttl=3600)
 def fetch_weather_data(lat, lon):
-    url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=temperature_2m,precipitation,weathercode,sunshine_duration,shortwave_radiation,windspeed_10m&windspeed_unit=ms&past_days=7&forecast_days=16&timezone=Asia%2FTokyo"
+    url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=temperature_2m,precipitation,weathercode,sunshine_duration,shortwave_radiation,windspeed_10m&windspeed_unit=ms&past_days=14&forecast_days=16&timezone=Asia%2FTokyo"
     for attempt in range(2):
         try:
             res = requests.get(url, timeout=5)
@@ -472,9 +472,10 @@ st.caption("※GitHub上の蓄積水位データおよびユーザーの手入�
 
 st.markdown("---")
 st.subheader("水位グラフ")
-graph_range = st.radio("グラフ表示期間", ["直近2日間", "直近1週間"], horizontal=True)
+graph_range = st.radio("グラフ表示期間", ["直近2日間", "直近1週間", "直近2週間"], horizontal=True)
 if not res["df_hydro"].empty and "time" in res["df_hydro"].columns:
-    past_days = 7 if graph_range == "直近1週間" else 2
+    days_map = {"直近2日間": 2, "直近1週間": 7, "直近2週間": 14}
+    past_days = days_map.get(graph_range, 7)
     start_time = pd.to_datetime(get_jst_now().date() - datetime.timedelta(days=past_days))
     end_time = pd.to_datetime(target_date + datetime.timedelta(days=1))
     chart_hydro = res["df_hydro"][(res["df_hydro"]["time"] >= start_time) & (res["df_hydro"]["time"] < end_time)].copy()
@@ -536,7 +537,7 @@ if not res["df_hydro"].empty and "time" in res["df_hydro"].columns and "estimate
             peak_hour = hours[temps.index(peak_temp)]
             st.info(f"【水温・活性予測】釣行日は {first_active}時頃 から水温が15℃を超えて活性が上がり始め、{peak_hour}時頃 に最高水温 {peak_temp:.1f}℃ に達する予測です。（AI学習バイアス補正: {res['learned_temp_bias']:+.1f}℃）")
         else:
-            st.warning(f"【水温・活性予測】釣行日は全体的に水温が低め（最高 {max(temps)::.1f}℃）の予測です。日中の温かい時間帯を狙うのが有効です。（AI学習バイアス補正: {res['learned_temp_bias']:+.1f}℃）")
+            st.warning(f"【水温・活性予測】釣行日は全体的に水温が低め（最高 {max(temps):.1f}℃）の予測です。日中の温かい時間帯を狙うのが有効です。（AI学習バイアス補正: {res['learned_temp_bias']:+.1f}℃）")
 
 st.markdown("---")
 st.subheader("各種ログ保存（AI学習用データ入力）")
