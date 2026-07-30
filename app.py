@@ -4,7 +4,6 @@ import numpy as np
 import datetime
 import requests
 import plotly.graph_objects as go
-from sklearn.linear_model import LinearRegression
 import os
 import json
 
@@ -14,18 +13,11 @@ DATA_URL = "https://raw.githubusercontent.com/ryugo0512/ayu_prediction_system/ma
 LOG_FILE = "fishing_logs.json"
 WATER_TEMP_LOG_FILE = "water_temp_logs.json"
 
-LOCATIONS = {
-    "rankoshi": {"lat": 42.79, "lon": 140.47},
-    "niseko": {"lat": 42.80, "lon": 140.68},
-    "kutchan": {"lat": 42.90, "lon": 140.76},
-    "kimobetsu": {"lat": 42.79, "lon": 140.92}
-}
-
 RIVERS = {
-    "尻別川本流": {"lat": 42.79, "lon": 140.47, "base_level": 9.08},
-    "昆布川": {"lat": 42.79, "lon": 140.53, "base_level": 43.58},
-    "天ノ川": {"lat": 41.88, "lon": 140.13, "base_level": 1.60},
-    "朱太川": {"lat": 42.64, "lon": 140.32, "base_level": 1.44}
+    "尻別川本流": {"lat": 42.79, "lon": 140.47, "base_level": 9.08, "decay_rate": 0.9975},
+    "昆布川": {"lat": 42.79, "lon": 140.53, "base_level": 43.58, "decay_rate": 0.9970},
+    "天ノ川": {"lat": 41.88, "lon": 140.13, "base_level": 1.60, "decay_rate": 0.9975},
+    "朱太川": {"lat": 42.64, "lon": 140.32, "base_level": 1.44, "decay_rate": 0.9972}
 }
 
 def get_jst_now():
@@ -41,8 +33,8 @@ def load_water_data():
         return {}
 
 @st.cache_data(ttl=1800)
-def fetch_weather_and_temp(lat, lon):
-    url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=temperature_2m,shortwave_radiation&timezone=Asia%2FTokyo&forecast_days=2"
+def fetch_weather(lat, lon):
+    url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=temperature_2m,precipitation,shortwave_radiation&timezone=Asia%2FTokyo&forecast_days=2"
     try:
         res = requests.get(url, timeout=10)
         res.raise_for_status()
@@ -50,51 +42,58 @@ def fetch_weather_and_temp(lat, lon):
         df = pd.DataFrame({
             "time": pd.to_datetime(data["hourly"]["time"]),
             "temp": data["hourly"]["temperature_2m"],
+            "rain": data["hourly"]["precipitation"],
             "rad": data["hourly"]["shortwave_radiation"]
         })
         return df
     except Exception:
         return pd.DataFrame()
 
-@st.cache_data(ttl=1800)
-def fetch_future_rain():
-    future_rain = {}
-    for loc, coords in LOCATIONS.items():
-        url = f"https://api.open-meteo.com/v1/forecast?latitude={coords['lat']}&longitude={coords['lon']}&hourly=precipitation&timezone=Asia%2FTokyo&forecast_days=2"
-        try:
-            res = requests.get(url, timeout=10)
-            data = res.json()
-            df = pd.DataFrame({
-                "time": pd.to_datetime(data["hourly"]["time"]),
-                f"rain_{loc}": data["hourly"]["precipitation"]
-            })
-            future_rain[loc] = df
-        except Exception:
-            pass
+def estimate_dynamic_decay_rate(df, default_decay):
+    if df.empty or len(df) < 2:
+        return default_decay
+    df_calc = df.copy()
+    df_calc["prev_level"] = df_calc["water_level"].shift(1)
+    if "fetch_error" not in df_calc.columns:
+        df_calc["fetch_error"] = False
     
-    if not future_rain:
-        return pd.DataFrame()
-    
-    merged_df = future_rain["rankoshi"]
-    for loc in ["niseko", "kutchan", "kimobetsu"]:
-        if loc in future_rain:
-            merged_df = pd.merge(merged_df, future_rain[loc], on="time", how="outer")
-    return merged_df
+    dropping = df_calc[(df_calc["water_level"] < df_calc["prev_level"]) & (~df_calc["fetch_error"])]
+    if len(dropping) >= 5:
+        rates = dropping["water_level"] / dropping["prev_level"]
+        return rates.median()
+    return default_decay
 
-def load_logs(file_path):
-    if os.path.exists(file_path):
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return []
-    return []
+def simulate_water_levels(df_past, df_weather, base_level, decay_rate):
+    if not df_past.empty:
+        last_time = df_past["time"].iloc[-1]
+        last_level = df_past["water_level"].iloc[-1]
+    else:
+        last_time = get_jst_now().replace(tzinfo=None)
+        last_level = base_level
 
-def save_log(file_path, data):
-    logs = load_logs(file_path)
-    logs.append(data)
-    with open(file_path, "w", encoding="utf-8") as f:
-        json.dump(logs, f, ensure_ascii=False, indent=2)
+    future_times = [last_time + datetime.timedelta(hours=i) for i in range(1, 25)]
+    pred_times = [last_time] + future_times
+    pred_levels = [last_level]
+
+    current_val = last_level
+    fut_eff_rain = 0.0
+
+    for f_time in future_times:
+        f_time_str = f_time.strftime("%Y-%m-%d %H:00:00")
+        rain = 0.0
+        if not df_weather.empty:
+            row = df_weather[df_weather["time"] == f_time_str]
+            if not row.empty:
+                rain = row["rain"].values[0]
+
+        rain_imp = rain * 0.035 + fut_eff_rain * 0.001
+        next_level = (current_val - base_level) * decay_rate + base_level + rain_imp
+        
+        pred_levels.append(next_level)
+        current_val = next_level
+        fut_eff_rain = fut_eff_rain * 0.5 + rain
+
+    return pd.DataFrame({"time": pred_times, "predicted_level": pred_levels})
 
 def predict_water_temp(df_weather):
     if df_weather.empty:
@@ -142,65 +141,20 @@ def calculate_recommendation(current_level, base_level, pred_level, current_temp
     
     return stars, f"【水位】{water_msg} / 【水温】{temp_msg}"
 
-def train_and_predict_water_level(df_past, df_future, base_level):
-    for col in ["rain_rankoshi", "rain_niseko", "rain_kutchan", "rain_kimobetsu"]:
-        if col not in df_past.columns:
-            df_past[col] = 0.0
-    df_past = df_past.fillna(0.0)
+def load_logs(file_path):
+    if os.path.exists(file_path):
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
 
-    df_past["prev_level"] = df_past["water_level"].shift(1)
-    train_df = df_past.dropna().copy()
-
-    features = ["prev_level", "rain_rankoshi", "rain_niseko", "rain_kutchan", "rain_kimobetsu"]
-    
-    model = LinearRegression()
-    if len(train_df) > 10:
-        X_train = train_df[features]
-        y_train = train_df["water_level"]
-        model.fit(X_train, y_train)
-    else:
-        model.coef_ = np.array([0.99, 0.01, 0.01, 0.01, 0.01])
-        model.intercept_ = base_level * (1 - 0.99)
-
-    if not df_past.empty:
-        last_time = df_past["time"].iloc[-1]
-        last_level = df_past["water_level"].iloc[-1]
-    else:
-        last_time = get_jst_now().replace(tzinfo=None)
-        last_level = base_level
-
-    future_times = [last_time + datetime.timedelta(hours=i) for i in range(1, 25)]
-    pred_times = [last_time] + future_times
-    pred_levels = [last_level]
-    
-    current_val = last_level
-    for f_time in future_times:
-        f_time_str = f_time.strftime("%Y-%m-%d %H:00:00")
-        
-        r_ran = r_nis = r_kut = r_kim = 0.0
-        if not df_future.empty:
-            rain_row = df_future[df_future["time"] == f_time_str]
-            if not rain_row.empty:
-                r_ran = rain_row["rain_rankoshi"].values[0] if "rain_rankoshi" in rain_row.columns else 0.0
-                r_nis = rain_row["rain_niseko"].values[0] if "rain_niseko" in rain_row.columns else 0.0
-                r_kut = rain_row["rain_kutchan"].values[0] if "rain_kutchan" in rain_row.columns else 0.0
-                r_kim = rain_row["rain_kimobetsu"].values[0] if "rain_kimobetsu" in rain_row.columns else 0.0
-        
-        X_pred = pd.DataFrame([[current_val, r_ran, r_nis, r_kut, r_kim]], columns=features)
-        
-        if len(train_df) > 10:
-            next_level = model.predict(X_pred)[0]
-        else:
-            next_level = current_val * 0.99 + (r_ran+r_nis+r_kut+r_kim)*0.01 + model.intercept_
-        
-        pred_levels.append(next_level)
-        current_val = next_level
-
-    df_pred = pd.DataFrame({
-        "time": pred_times,
-        "predicted_level": pred_levels
-    })
-    return df_pred
+def save_log(file_path, data):
+    logs = load_logs(file_path)
+    logs.append(data)
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(logs, f, ensure_ascii=False, indent=2)
 
 def main():
     st.title("鮎釣り総合予測システム")
@@ -209,8 +163,7 @@ def main():
     river_info = RIVERS[river_name]
     
     data_json = load_water_data()
-    df_weather = fetch_weather_and_temp(river_info["lat"], river_info["lon"])
-    df_future_rain = fetch_future_rain()
+    df_weather = fetch_weather(river_info["lat"], river_info["lon"])
     df_temp_pred = predict_water_temp(df_weather)
     
     df_past = pd.DataFrame()
@@ -224,28 +177,28 @@ def main():
     current_level = df_past["water_level"].iloc[-1] if not df_past.empty else river_info["base_level"]
     current_temp = df_temp_pred["predicted_water_temp"].iloc[0] if not df_temp_pred.empty else 18.0
     
+    dynamic_decay = estimate_dynamic_decay_rate(df_past, river_info["decay_rate"])
+    
     df_pred = pd.DataFrame()
     if not df_past.empty:
-        df_pred = train_and_predict_water_level(df_past, df_future_rain, river_info["base_level"])
+        df_pred = simulate_water_levels(df_past, df_weather, river_info["base_level"], dynamic_decay)
         pred_24h_level = df_pred["predicted_level"].iloc[-1]
     else:
         pred_24h_level = current_level
 
     stars, rec_msg = calculate_recommendation(current_level, river_info["base_level"], pred_24h_level, current_temp)
 
-    # 1. サマリーダッシュボード
     st.markdown("---")
     m_col1, m_col2, m_col3, m_col4 = st.columns(4)
     m_col1.metric("現在水位", f"{current_level:.2f} m", f"基準比: {current_level - river_info['base_level']:+.2f} m")
-    m_col2.metric("24時間後予測水位", f"{pred_24h_level:.2f} m", f"現在比: {pred_24h_level - current_level:+.2f} m")
+    m_col2.metric("24時間後予測", f"{pred_24h_level:.2f} m", f"現在比: {pred_24h_level - current_level:+.2f} m")
     m_col3.metric("推定水温", f"{current_temp:.1f} ℃")
     m_col4.metric("釣行オススメ度", stars)
     
     st.info(f"**コンディション診断:** {rec_msg}")
 
-    # 2. 水位グラフ（連続線描画）
     st.markdown("---")
-    st.subheader("水位グラフ（重回帰分析モデル）")
+    st.subheader("水位グラフ")
     
     if not df_past.empty:
         graph_range = st.radio("グラフ表示期間", ["直近2日間", "直近1週間", "直近2週間"], horizontal=True, index=1)
@@ -283,17 +236,11 @@ def main():
             line=dict(color="red", width=2)
         ))
         
-        fig_water.update_layout(
-            xaxis_title="時間", 
-            yaxis_title="水位(m)", 
-            height=450,
-            hovermode="x unified"
-        )
+        fig_water.update_layout(xaxis_title="時間", yaxis_title="水位(m)", height=450, hovermode="x unified")
         st.plotly_chart(fig_water, use_container_width=True)
     else:
         st.warning("水位蓄積データがありません。")
 
-    # 3. 水温予測グラフ
     st.markdown("---")
     st.subheader("水温予測グラフ")
     if not df_temp_pred.empty:
@@ -308,7 +255,6 @@ def main():
         fig_temp.update_layout(xaxis_title="時間", yaxis_title="水温 (℃)", height=350, hovermode="x unified")
         st.plotly_chart(fig_temp, use_container_width=True)
 
-    # 4. ログ入力フォーム
     st.markdown("---")
     col1, col2 = st.columns(2)
     
@@ -335,7 +281,6 @@ def main():
                 save_log(LOG_FILE, log_data)
                 st.success("釣果ログを保存した。")
 
-    # 5. ログ表示タブ
     st.markdown("---")
     st.subheader("保存ログ確認")
     tab1, tab2 = st.tabs(["水温履歴", "釣果履歴"])
