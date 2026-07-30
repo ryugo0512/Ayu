@@ -385,7 +385,16 @@ if not res["df_hydro"].empty and "time" in res["df_hydro"].columns:
         chart_hydro["予測水位(m)"] = chart_hydro.apply(lambda row: row["simulated_level"] if row["time"] >= now_h else np.nan, axis=1)
         chart_hydro = chart_hydro.rename(columns={"base_level": "基準水位線(m)"})
         
-        min_val, max_val = chart_hydro[["simulated_level", "基準水位線(m)"]].min().min(), chart_hydro[["simulated_level", "基準水位線(m)"]].max().max()
+        # グラフのY軸スケール設定（基準値を中心に -0.3m から +0.7m を固定確保。それ以上/以下は動的拡張）
+        base_val = river_info["base_level"]
+        y_min_fixed = base_val - 0.3
+        y_max_fixed = base_val + 0.7
+        data_min = chart_hydro["simulated_level"].min()
+        data_max = chart_hydro["simulated_level"].max()
+        
+        y_min = min(y_min_fixed, data_min - 0.1) if pd.notna(data_min) else y_min_fixed
+        y_max = max(y_max_fixed, data_max + 0.1) if pd.notna(data_max) else y_max_fixed
+        
         hydro_melt = chart_hydro.melt(id_vars=["time"], value_vars=["過去水位(m)", "予測水位(m)", "基準水位線(m)"], var_name="凡例", value_name="水位").dropna()
         
         color_scale = alt.Scale(
@@ -395,7 +404,7 @@ if not res["df_hydro"].empty and "time" in res["df_hydro"].columns:
         
         hydro_chart = alt.Chart(hydro_melt).mark_line(strokeWidth=2).encode(
             x=alt.X("time:T", title="時間", axis=alt.Axis(format="%m/%d %H:00", labelAngle=-90)), 
-            y=alt.Y("水位:Q", scale=alt.Scale(domain=[min_val - 0.1, max_val + 0.1])),
+            y=alt.Y("水位:Q", scale=alt.Scale(domain=[y_min, y_max])),
             color=alt.Color("凡例:N", scale=color_scale), 
             tooltip=[alt.Tooltip("time:T", title="時間", format="%m/%d %H:%M"), "凡例", "水位"]
         ).properties(height=300)
