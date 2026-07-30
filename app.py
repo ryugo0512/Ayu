@@ -94,10 +94,10 @@ def train_and_predict(df_past, df_future, base_level):
         if not df_future.empty:
             rain_row = df_future[df_future["time"] == f_time_str]
             if not rain_row.empty:
-                r_ran = rain_row["rain_rankoshi"].values[0]
-                r_nis = rain_row["rain_niseko"].values[0]
-                r_kut = rain_row["rain_kutchan"].values[0]
-                r_kim = rain_row["rain_kimobetsu"].values[0]
+                r_ran = rain_row["rain_rankoshi"].values[0] if "rain_rankoshi" in rain_row else 0.0
+                r_nis = rain_row["rain_niseko"].values[0] if "rain_niseko" in rain_row else 0.0
+                r_kut = rain_row["rain_kutchan"].values[0] if "rain_kutchan" in rain_row else 0.0
+                r_kim = rain_row["rain_kimobetsu"].values[0] if "rain_kimobetsu" in rain_row else 0.0
         
         X_pred = pd.DataFrame([[last_level, r_ran, r_nis, r_kut, r_kim]], columns=features)
         
@@ -127,7 +127,9 @@ def main():
     df_past = pd.DataFrame()
     if river_name in data_json and data_json[river_name]:
         df_past = pd.DataFrame(data_json[river_name])
-        df_past["time"] = pd.to_datetime(df_past["timestamp"])
+        # 不正な日付文字列をNaTに変換し、エラーで停止しないよう修正
+        df_past["time"] = pd.to_datetime(df_past["timestamp"], errors="coerce")
+        df_past = df_past.dropna(subset=["time"])
         df_past = df_past.sort_values("time").reset_index(drop=True)
     
     if df_past.empty:
