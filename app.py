@@ -14,6 +14,9 @@ st.set_page_config(page_title="北海道 鮎コンディション判定", page_i
 LOG_FILE = "fishing_logs.json"
 WATER_TEMP_LOG_FILE = "water_temp_logs.json"
 
+def get_jst_now():
+    return pd.Timestamp.now(tz="Asia/Tokyo").tz_localize(None)
+
 def load_logs():
     if os.path.exists(LOG_FILE):
         with open(LOG_FILE, "r", encoding="utf-8") as f:
@@ -211,7 +214,7 @@ def fetch_weather_data(lat, lon):
                 return df, True
         except Exception:
             if attempt == 0: time.sleep(2)
-    now = pd.Timestamp.now().floor("h")
+    now = get_jst_now().floor("h")
     df_dummy = pd.DataFrame({
         "time": pd.date_range(end=now + pd.Timedelta(days=16), periods=24 * 16, freq="h"),
         "temperature_2m": 20.0, "precipitation": 0.0, "weathercode": 0,
@@ -230,10 +233,10 @@ def get_weather_desc(code):
 
 def simulate_water_levels(df_weather, base_level, current_actual, river_decay_rate, river_name):
     if df_weather is None or df_weather.empty or "precipitation" not in df_weather.columns:
-        return pd.DataFrame({"time": [pd.Timestamp.now()], "simulated_level": [current_actual]})
+        return pd.DataFrame({"time": [get_jst_now()], "simulated_level": [current_actual]})
     df_weather = df_weather.sort_values("time").reset_index(drop=True)
     history = load_water_history().get(river_name, {})
-    now = pd.Timestamp.now().floor("h")
+    now = get_jst_now().floor("h")
     time_diffs = (df_weather["time"] - now).abs()
     now_idx = int(time_diffs.idxmin())
     simulated_levels = np.full(len(df_weather), np.nan)
@@ -289,7 +292,7 @@ def analyze_condition(df_weather, is_weather_live, river_info, user_logs, target
     moss_growth = min(100, int((days_since_flood * growth_rate * max(0.7, min(1.3, recent_rad / 180.0))) * (1.0 + bias_growth)))
     if not target_df.empty and len(target_df) >= 24:
         hourly_water_temp = target_df["estimated_water_temp"].tolist()[:24]
-        display_water_level = current_actual if target_date == datetime.date.today() else target_df["simulated_level"].mean()
+        display_water_level = current_actual if target_date == get_jst_now().date() else target_df["simulated_level"].mean()
         weather_desc = get_weather_desc(target_df["weathercode"].mode()[0] if "weathercode" in target_df.columns else 0)
         temp_max, temp_min = target_df["temperature_2m"].max(), target_df["temperature_2m"].min()
         water_temp_max, water_temp_avg = max(hourly_water_temp), float(np.mean(hourly_water_temp))
@@ -334,7 +337,7 @@ col_sel1, col_sel2 = st.columns(2)
 with col_sel1:
     target_river = st.selectbox("河川を選択", list(RIVERS.keys()))
 with col_sel2:
-    today_date = datetime.date.today()
+    today_date = get_jst_now().date()
     target_date = st.date_input("釣行予定日", today_date, min_value=today_date - datetime.timedelta(days=7), max_value=today_date + datetime.timedelta(days=5))
 
 river_info = RIVERS[target_river]
@@ -373,18 +376,17 @@ st.subheader("水位グラフ")
 graph_range = st.radio("グラフ表示期間", ["直近2日間", "直近1週間"], horizontal=True)
 if not res["df_hydro"].empty and "time" in res["df_hydro"].columns:
     past_days = 7 if graph_range == "直近1週間" else 2
-    start_time = pd.to_datetime(datetime.date.today() - datetime.timedelta(days=past_days))
+    start_time = pd.to_datetime(get_jst_now().date() - datetime.timedelta(days=past_days))
     end_time = pd.to_datetime(target_date + datetime.timedelta(days=1))
     chart_hydro = res["df_hydro"][(res["df_hydro"]["time"] >= start_time) & (res["df_hydro"]["time"] < end_time)].copy()
     if not chart_hydro.empty:
-        now_h = pd.Timestamp.now().floor("h")
+        now_h = get_jst_now().floor("h")
         chart_hydro["過去水位(m)"] = chart_hydro.apply(lambda row: row["simulated_level"] if row["time"] <= now_h else np.nan, axis=1)
         chart_hydro["予測水位(m)"] = chart_hydro.apply(lambda row: row["simulated_level"] if row["time"] >= now_h else np.nan, axis=1)
-        chart_hydro["時間"] = chart_hydro["time"].dt.strftime("%m/%d %H時")
         chart_hydro = chart_hydro.rename(columns={"base_level": "基準水位線(m)"})
         
         min_val, max_val = chart_hydro[["simulated_level", "基準水位線(m)"]].min().min(), chart_hydro[["simulated_level", "基準水位線(m)"]].max().max()
-        hydro_melt = chart_hydro.melt(id_vars=["時間"], value_vars=["過去水位(m)", "予測水位(m)", "基準水位線(m)"], var_name="凡例", value_name="水位").dropna()
+        hydro_melt = chart_hydro.melt(id_vars=["time"], value_vars=["過去水位(m)", "予測水位(m)", "基準水位線(m)"], var_name="凡例", value_name="水位").dropna()
         
         color_scale = alt.Scale(
             domain=["基準水位線(m)", "過去水位(m)", "予測水位(m)"],
@@ -392,25 +394,25 @@ if not res["df_hydro"].empty and "time" in res["df_hydro"].columns:
         )
         
         hydro_chart = alt.Chart(hydro_melt).mark_line(strokeWidth=2).encode(
-            x=alt.X("時間:N", sort=None), 
+            x=alt.X("time:T", title="時間", axis=alt.Axis(format="%m/%d %H:00", labelAngle=-90)), 
             y=alt.Y("水位:Q", scale=alt.Scale(domain=[min_val - 0.1, max_val + 0.1])),
             color=alt.Color("凡例:N", scale=color_scale), 
-            tooltip=["時間", "凡例", "水位"]
+            tooltip=[alt.Tooltip("time:T", title="時間", format="%m/%d %H:%M"), "凡例", "水位"]
         ).properties(height=300)
         st.altair_chart(hydro_chart, use_container_width=True)
 
 st.markdown("---")
 st.subheader("水温グラフ & 活性予測")
 if not res["df_hydro"].empty and "time" in res["df_hydro"].columns and "estimated_water_temp" in res["df_hydro"].columns:
-    start_time = pd.to_datetime(datetime.date.today())
+    start_time = pd.to_datetime(get_jst_now().date())
     end_time = pd.to_datetime(target_date + datetime.timedelta(days=1))
     chart_temp = res["df_hydro"][(res["df_hydro"]["time"] >= start_time) & (res["df_hydro"]["time"] < end_time)].copy()
     if not chart_temp.empty:
         chart_temp["推定水温(℃)"] = chart_temp["estimated_water_temp"]
-        chart_temp["時間"] = chart_temp["time"].dt.strftime("%m/%d %H時")
         temp_chart = alt.Chart(chart_temp).mark_line(strokeWidth=2, color="orange").encode(
-            x=alt.X("時間:N", sort=None), y=alt.Y("推定水温(℃):Q", scale=alt.Scale(zero=False)),
-            tooltip=["時間", "推定水温(℃)"]
+            x=alt.X("time:T", title="時間", axis=alt.Axis(format="%m/%d %H:00", labelAngle=-90)), 
+            y=alt.Y("推定水温(℃):Q", scale=alt.Scale(zero=False)),
+            tooltip=[alt.Tooltip("time:T", title="時間", format="%m/%d %H:%M"), "推定水温(℃)"]
         ).properties(height=250)
         st.altair_chart(temp_chart, use_container_width=True)
 
