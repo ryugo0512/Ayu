@@ -13,7 +13,6 @@ st.set_page_config(page_title="北海道 鮎コンディション判定", page_i
 
 LOG_FILE = "fishing_logs.json"
 WATER_TEMP_LOG_FILE = "water_temp_logs.json"
-WATER_LOG_FILE = "water_levels_history.json"
 
 def load_logs():
     if os.path.exists(LOG_FILE):
@@ -57,19 +56,40 @@ def delete_water_temp_log(index):
         logs.pop(index)
         save_water_temp_logs(logs)
 
+@st.cache_data(ttl=900)
 def load_water_history():
-    if os.path.exists(WATER_LOG_FILE):
-        with open(WATER_LOG_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
-
-def save_water_history(river_name, timestamp_str, level):
-    history = load_water_history()
-    if river_name not in history:
-        history[river_name] = {}
-    history[river_name][timestamp_str] = level
-    with open(WATER_LOG_FILE, "w", encoding="utf-8") as f:
-        json.dump(history, f, ensure_ascii=False, indent=2)
+    url = "https://raw.githubusercontent.com/ryugo0512/ayu_prediction_system/main/data/water_levels.json"
+    try:
+        res = requests.get(url, timeout=5)
+        res.raise_for_status()
+        raw_data = res.json()
+        
+        name_map = {
+            "尻別川本流": "尻別川本流（豊国橋）",
+            "昆布川": "昆布川（昆布）",
+            "天ノ川": "天ノ川（上ノ国）",
+            "朱太川": "朱太川（黒松内）"
+        }
+        
+        history = {}
+        for raw_name, records in raw_data.items():
+            target_name = name_map.get(raw_name, raw_name)
+            history[target_name] = {}
+            if isinstance(records, list):
+                for rec in records:
+                    if isinstance(rec, dict) and not rec.get("fetch_error", False):
+                        ts = rec.get("timestamp")
+                        lvl = rec.get("water_level")
+                        if ts and lvl is not None:
+                            try:
+                                dt = pd.to_datetime(ts)
+                                ts_str = dt.strftime("%Y-%m-%d %H:00")
+                                history[target_name][ts_str] = float(lvl)
+                            except Exception:
+                                pass
+        return history
+    except Exception:
+        return {}
 
 def estimate_dynamic_decay_rate(river_name, base_level, default_decay):
     history = load_water_history().get(river_name, {})
@@ -320,8 +340,6 @@ with col_sel2:
 river_info = RIVERS[target_river]
 
 current_actual, fetch_source = fetch_weather_water_level(river_info["weather_url"], river_info["default_actual"])
-now_hour_str = pd.Timestamp.now().strftime("%Y-%m-%d %H:00")
-save_water_history(target_river, now_hour_str, current_actual)
 
 df_weather, is_weather_live = fetch_weather_data(river_info["lat"], river_info["lon"])
 user_logs = load_logs()
