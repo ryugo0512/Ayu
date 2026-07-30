@@ -362,6 +362,13 @@ col6.metric("風速", f"{res['max_wind']:.1f} m/s")
 st.write(f"大水からの経過日数: {res['days_since_flood']} 日 / 濁り予測: {res['clarity_recovery']} / アラート: {res['moss_alert']}")
 
 st.markdown("---")
+st.subheader("AI学習ステータス")
+col_ai1, col_ai2 = st.columns(2)
+col_ai1.metric("適用減衰率 (水位低下スピード)", f"{res['learned_decay']:.4f}", f"基準値差: {res['learned_decay'] - river_info.get('decay_rate', 0.9975):+.4f}", delta_color="off")
+col_ai2.metric("水温バイアス補正", f"{res['learned_temp_bias']:+.1f} ℃", delta_color="off")
+st.caption("※GitHub上の蓄積水位データおよびユーザーの手入力水温ログから自動算出された現在のシミュレーション適用値です。")
+
+st.markdown("---")
 st.subheader("水位グラフ")
 graph_range = st.radio("グラフ表示期間", ["直近2日間", "直近1週間"], horizontal=True)
 if not res["df_hydro"].empty and "time" in res["df_hydro"].columns:
