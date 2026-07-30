@@ -14,7 +14,7 @@ LOG_FILE = "fishing_logs.json"
 WATER_TEMP_LOG_FILE = "water_temp_logs.json"
 
 RIVERS = {
-    "尻別川本流": {"lat": 42.79, "lon": 140.47, "base_level": 9.08, "decay_rate": 0.9975},
+    "尻別川本流": {"lat": 42.79, "lon": 140.47, "base_level": 1.60, "decay_rate": 0.9975},
     "昆布川": {"lat": 42.79, "lon": 140.53, "base_level": 43.58, "decay_rate": 0.9970},
     "天ノ川": {"lat": 41.88, "lon": 140.13, "base_level": 1.60, "decay_rate": 0.9975},
     "朱太川": {"lat": 42.64, "lon": 140.32, "base_level": 1.44, "decay_rate": 0.9972}
