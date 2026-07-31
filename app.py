@@ -498,13 +498,19 @@ if not res["df_hydro"].empty and "time" in res["df_hydro"].columns:
         
         color_scale = alt.Scale(
             domain=["基準水位線(m)", "過去水位(m)", "予測水位(m)"],
-            range=["#004488", "#55AAFF", "#FF4444"]
+            range=["#FFD700", "#000080", "#FF4444"]
+        )
+        
+        dash_scale = alt.Scale(
+            domain=["基準水位線(m)", "過去水位(m)", "予測水位(m)"],
+            range=[[5, 5], [1, 0], [1, 0]]
         )
         
         hydro_chart = alt.Chart(hydro_melt).mark_line(strokeWidth=2).encode(
             x=alt.X("time:T", title="時間", axis=alt.Axis(format="%m/%d %H:00", labelAngle=-90)), 
             y=alt.Y("水位:Q", scale=alt.Scale(domain=[y_min, y_max])),
             color=alt.Color("凡例:N", scale=color_scale), 
+            strokeDash=alt.StrokeDash("凡例:N", scale=dash_scale, legend=None),
             tooltip=[alt.Tooltip("time:T", title="時間", format="%m/%d %H:%M"), "凡例", "水位"]
         ).properties(height=300)
         st.altair_chart(hydro_chart, use_container_width=True)
