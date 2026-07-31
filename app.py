@@ -157,7 +157,7 @@ RIVERS = {
         "station_name": "豊国橋", "river_system": "尻別川水系 尻別川",
         "weather_url": "https://weathernews.jp/onebox/river/shiribetsugawa/?pid=2078700400004",
         "temp_base": 9.0, "temp_factor": 0.30, "max_temp": 20.0, "decay_rate": 0.9975,
-        "thresholds": {"slight": 0.25, "hard": 0.50, "danger": 0.80}
+        "thresholds": {"slight": 0.15, "hard": 0.30, "danger": 0.50}
     },
     "昆布川（昆布）": {
         "lat": 42.7958, "lon": 140.5986, "base_level": 43.58, "default_actual": 43.58,
@@ -405,7 +405,6 @@ def analyze_condition(df_weather, is_weather_live, river_info, user_logs, target
         score -= 1
         score_details.append(f"垢腐りによる食み渋り: -1点")
 
-    # 釣り抜け・場荒れ（プレッシャー蓄積）ロジックの追加
     if days_since_flood >= 14:
         score -= 2
         score_details.append("長期間リセットなし (深刻な場荒れ・鮎の引き抜き進行): -2点")
@@ -419,7 +418,7 @@ def analyze_condition(df_weather, is_weather_live, river_info, user_logs, target
         score_details.append(f"※大増水 (危険水位 +{t_danger*100:.0f}cm以上) のため上限1点")
     elif level_diff >= t_hard:
         final_score = min(final_score, 3)
-        score_details.append(f"※増水 (釣り困難 +{t_hard*100:.0f}cm以上) のため上限3点")
+        score_details.append(f"※増水 (釣り困難・ヘチ限定 +{t_hard*100:.0f}cm以上) のため上限3点")
     elif level_diff >= t_slight:
         final_score = min(final_score, 7)
         score_details.append(f"※やや高水 (+{t_slight*100:.0f}cm以上) のため上限7点")
