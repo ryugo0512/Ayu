@@ -153,7 +153,7 @@ def estimate_water_temp_bias(river_name, river_info):
 
 RIVERS = {
     "尻別川本流（豊国橋）": {
-        "lat": 42.8021, "lon": 140.5251, "base_level": 9.08, "default_actual": 9.08,
+        "lat": 42.8021, "lon": 140.5251, "base_level": 9.60, "default_actual": 9.60,
         "station_name": "豊国橋", "river_system": "尻別川水系 尻別川",
         "weather_url": "https://weathernews.jp/onebox/river/shiribetsugawa/?pid=2078700400004",
         "temp_base": 9.0, "temp_factor": 0.30, "max_temp": 20.0, "decay_rate": 0.9975,
@@ -204,14 +204,14 @@ def fetch_weather_water_level(url, default_val):
                 if matches:
                     for m_str in matches:
                         val = float(m_str)
-                        if abs(val - default_val) <= 1.0:
+                        if abs(val - default_val) <= 3.0:
                             extracted_val = val
                             break
                     if extracted_val is None:
                         extracted_val = float(matches[0])
             
             if extracted_val is not None:
-                if abs(extracted_val - default_val) <= 1.0:
+                if abs(extracted_val - default_val) <= 3.0:
                     return extracted_val, "自動取得"
                 else:
                     return default_val, "エラー(異常値検知)"
