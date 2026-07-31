@@ -405,6 +405,14 @@ def analyze_condition(df_weather, is_weather_live, river_info, user_logs, target
         score -= 1
         score_details.append(f"垢腐りによる食み渋り: -1点")
 
+    # 釣り抜け・場荒れ（プレッシャー蓄積）ロジックの追加
+    if days_since_flood >= 14:
+        score -= 2
+        score_details.append("長期間リセットなし (深刻な場荒れ・鮎の引き抜き進行): -2点")
+    elif days_since_flood >= 10:
+        score -= 1
+        score_details.append("出水から長期間経過 (主要ポイントの場荒れ): -1点")
+
     final_score = max(1, min(score, 10))
     if level_diff >= t_danger:
         final_score = min(final_score, 1)
