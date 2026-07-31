@@ -153,7 +153,7 @@ def estimate_water_temp_bias(river_name, river_info):
 
 RIVERS = {
     "尻別川本流（豊国橋）": {
-        "lat": 42.8021, "lon": 140.5251, "base_level": 9.60, "default_actual": 9.60,
+        "lat": 42.8021, "lon": 140.5251, "base_level": 9.06, "default_actual": 9.06,
         "station_name": "豊国橋", "river_system": "尻別川水系 尻別川",
         "weather_url": "https://weathernews.jp/onebox/river/shiribetsugawa/?pid=2078700400004",
         "temp_base": 9.0, "temp_factor": 0.30, "max_temp": 20.0, "decay_rate": 0.9975,
