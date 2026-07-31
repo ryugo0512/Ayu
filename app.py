@@ -300,9 +300,9 @@ def analyze_condition(df_weather, is_weather_live, river_info, user_logs, target
     if "precipitation" in df_past.columns:
         df_past["rain_12h"] = df_past["precipitation"].rolling(12, min_periods=1).sum()
         heavy_events = df_past[(df_past["precipitation"] >= 30.0) | (df_past["rain_12h"] >= 60.0)]
-        days_since_flood = (target_datetime - heavy_events["time"].max()).days if not heavy_events.empty else 10
+        days_since_flood = (target_datetime - heavy_events["time"].max()).days if not heavy_events.empty else 14
     else:
-        days_since_flood = 10
+        days_since_flood = 14
         
     recent_rain = df_past.tail(24)["precipitation"].sum() if "precipitation" in df_past.columns else 0.0
     clarity_recovery = "強濁り" if recent_rain > 60 else "笹濁り" if recent_rain > 30 else "清澄"
@@ -342,7 +342,7 @@ def analyze_condition(df_weather, is_weather_live, river_info, user_logs, target
     
     if days_since_flood <= 1 or moss_growth < 20: moss_alert = "全飛び直後"
     elif days_since_flood <= 3 or moss_growth < 50: moss_alert = "垢付き始め"
-    elif level_diff < -0.15 and days_since_flood > 10: moss_alert = "垢腐り注意"
+    elif days_since_flood >= 14 or (level_diff < -0.10 and days_since_flood >= 10): moss_alert = "垢腐り注意"
     else: moss_alert = "新垢良好"
     
     df_future = df_weather[df_weather["time"] >= target_datetime].head(24) if "time" in df_weather.columns else pd.DataFrame()
@@ -400,6 +400,10 @@ def analyze_condition(df_weather, is_weather_live, river_info, user_logs, target
             elif diff_from_max > 0.05 and level_diff >= 0:
                 score += 1
                 score_details.append("引き水傾向 (縄張り意識向上): +1点")
+
+    if "垢腐り" in moss_alert:
+        score -= 1
+        score_details.append(f"垢腐りによる食み渋り: -1点")
 
     final_score = max(1, min(score, 10))
     if level_diff >= t_danger:
