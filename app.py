@@ -497,13 +497,15 @@ if not res["df_hydro"].empty and "time" in res["df_hydro"].columns:
         chart_hydro = chart_hydro.rename(columns={"base_level": "基準水位線(m)"})
         
         base_val = river_info["base_level"]
-        y_min_fixed = base_val - 0.3
-        y_max_fixed = base_val + 0.7
         data_min = chart_hydro["simulated_level"].min()
         data_max = chart_hydro["simulated_level"].max()
         
-        y_min = min(y_min_fixed, data_min - 0.1) if pd.notna(data_min) else y_min_fixed
-        y_max = max(y_max_fixed, data_max + 0.1) if pd.notna(data_max) else y_max_fixed
+        if pd.notna(data_min) and pd.notna(data_max):
+            y_min = min(base_val - 0.05, data_min - 0.05)
+            y_max = max(base_val + 0.05, data_max + 0.05)
+        else:
+            y_min = base_val - 0.1
+            y_max = base_val + 0.1
         
         hydro_melt = chart_hydro.melt(id_vars=["time"], value_vars=["過去水位(m)", "予測水位(m)", "基準水位線(m)"], var_name="凡例", value_name="水位").dropna()
         
